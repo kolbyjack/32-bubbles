@@ -1,0 +1,40 @@
+<html>
+  <head>
+    <title>32 Bubbles</title>
+    <script lang="javascript">
+      window.onload = function() {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", "config");
+        xhr.onload = function() {
+          console.log(xhr);
+          if (xhr.status !== 200) return;
+
+          var json = JSON.parse(xhr.responseText);
+          console.log(json);
+          for (var field in json) {
+              var el = document.getElementById(field);
+              console.log(el);
+              console.log(json[field]);
+              el.setAttribute("value", json[field]);
+          }
+        };
+        xhr.send();
+      };
+    </script>
+  </head>
+
+  <body>
+    <form method="POST" action="/config">
+      <table>
+        <tr><td>Node name:</td><td><input name="hostname" id="hostname" type="text" /></td></tr>
+        <tr><td>WiFi SSID:</td><td><input name="wifi_ssid" id="wifi_ssid" type="text" /></td></tr>
+        <tr><td>WiFi Password:</td><td><input name="wifi_pass" id="wifi_pass" type="password" /></td></tr>
+        <tr><td>MQTT Host:</td><td><input name="mqtt_host" id="mqtt_host" type="text" /></td></tr>
+        <tr><td>MQTT Port:</td><td><input name="mqtt_port" id="mqtt_port" type="number" /></td></tr>
+        <tr><td>MQTT User:</td><td><input name="mqtt_user" id="mqtt_user" type="text" /></td></tr>
+        <tr><td>MQTT Password:</td><td><input name="mqtt_pass" id="mqtt_pass" type="password" /></td></tr>
+        <tr><td colspan="2"><input type="submit" /></td></tr>
+      </table>
+    </form>
+  </body>
+</html>

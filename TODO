@@ -1,0 +1,3 @@
+- Use blobs for wifi_ssid and wifi_password
+- Use interrupts for button press instead of polling
+- Add tls support to mqtt
