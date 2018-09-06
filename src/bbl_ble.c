@@ -7,6 +7,7 @@
 
 #include "esp_ibeacon_api.h"
 #include "esp_eddystone_api.h"
+#include "esp_altbeacon_api.h"
 
 #include "bbl_mqtt.h"
 #include "bbl_config.h"
@@ -186,16 +187,57 @@ static void publish_eddystone(beacon_t *beacon, const esp_eddystone_result_t *es
     }
 }
 
+static void publish_altbeacon(beacon_t *beacon, const esp_ble_altbeacon_t *ab_data)
+{
+    char mqtt_buf[640];
+
+    size_t topic_length = bbl_snprintf(mqtt_buf, sizeof(mqtt_buf), "happy-bubbles/ble/%s/ibeacon/%.*hs",
+        bbl_config_get_string(ConfigKeyHostname),
+        sizeof(ab_data->beacon_id), ab_data->beacon_id
+    );
+
+    // Happy Bubbles Presence Server doesn't care about Altbeacons, so lie and say we're an iBeacon
+    char *payload = mqtt_buf + topic_length + 1;
+    size_t payload_length = bbl_snprintf(payload, sizeof(mqtt_buf) - (payload - mqtt_buf),
+        "{"
+            "\"hostname\":\"%js\","
+            "\"beacon_type\":\"ibeacon\","
+            "\"mac\":\"%.*hs\","
+            "\"rssi\":%d,"
+            "\"data\":\"%.*hs\","
+            "\"uuid\":\"%.*hs\","
+            "\"major\":\"%04x\","
+            "\"minor\":\"%04x\","
+            "\"tx_power\":\"%02x\""
+        "}",
+        bbl_config_get_string(ConfigKeyHostname),
+        sizeof(beacon->mac), beacon->mac,
+        beacon->rssi,
+        beacon->adv_data_len, beacon->adv_data,
+        sizeof(ab_data->beacon_id), ab_data->beacon_id,
+        ab_data->major,
+        ab_data->minor,
+        (uint8_t)ab_data->rssi
+    );
+
+    if (ble_publish(mqtt_buf, payload, payload_length)) {
+        INC_STAT(ibeacon_published);
+    }
+}
+
 static void publish_ble_advertisement(beacon_t *beacon)
 {
     esp_ble_ibeacon_t ib_data;
     esp_eddystone_result_t es_data;
+    esp_ble_altbeacon_t ab_data;
 
     publish_raw(beacon);
     if (esp_ibeacon_decode(beacon->adv_data, beacon->adv_data_len, &ib_data) == ESP_OK) {
         publish_ibeacon(beacon, &ib_data);
     } else if (esp_eddystone_decode(beacon->adv_data, beacon->adv_data_len, &es_data) == ESP_OK) {
         publish_eddystone(beacon, &es_data);
+    } else if (esp_altbeacon_decode(beacon->adv_data, beacon->adv_data_len, &ab_data) == ESP_OK) {
+        publish_altbeacon(beacon, &ab_data);
     }
 }
 
