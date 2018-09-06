@@ -238,15 +238,14 @@ static void publish_stats()
 
 static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
+    esp_task_wdt_feed();
+
     switch (event) {
-    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT: {
-        esp_task_wdt_feed();
+    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
         esp_ble_gap_start_scanning(1);
         break;
-    }
 
     case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
-        esp_task_wdt_feed();
         if (param->scan_start_cmpl.status != ESP_BT_STATUS_SUCCESS) {
             esp_ble_gap_start_scanning(1);
         }
@@ -256,7 +255,6 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
         esp_ble_gap_cb_param_t *p = (esp_ble_gap_cb_param_t *)param;
         ble_scan_result_evt_param_t *r = &p->scan_rst;
 
-        esp_task_wdt_feed();
         if (r->search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) {
             for (int i = 0; i < beacon_cache_count; ++i) {
                 publish_ble_advertisement(&beacon_cache[i]);
