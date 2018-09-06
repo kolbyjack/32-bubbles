@@ -95,7 +95,7 @@ void app_main()
 
     ESP_ERROR_CHECK(nvs_flash_init());
     ESP_ERROR_CHECK(esp_event_loop_init(event_handler, NULL));
-    ESP_ERROR_CHECK(esp_task_wdt_init(10, true));
+    ESP_ERROR_CHECK(esp_task_wdt_init(30, true));
     tcpip_adapter_init();
 
     bbl_config_init();
