@@ -2,11 +2,11 @@
 
 #include "bbl_config.h"
 #include "bbl_utils.h"
+#include "bbl_version.h"
 
 #include <nvs.h>
 
 #define BBL_CONFIG_FILENAME "32-bubbles"
-#define BBL_FIRMWARE_BUILD __DATE__ " " __TIME__
 
 typedef enum {
     StringValue,
@@ -28,25 +28,31 @@ typedef struct {
 
 static bbl_config_item_t bbl_config_items[] =
 {
-    { "boot_mode",  IntValue,    { .int_val = 0    }, { .int_val = 0    }, false },
-    { "boot_count", IntValue,    { .int_val = 0    }, { .int_val = 0    }, true  },
-    { "build_date", StringValue, { .str_val = ""   }, { .str_val = NULL }, true  },
+    { "version",    StringValue, { .str_val = BBL_VERSION    }, { .str_val = NULL }, true  },
+    { "build_date", StringValue, { .str_val = BBL_BUILD_DATE }, { .str_val = NULL }, true  },
+    { "boot_count", IntValue,    { .int_val = 0              }, { .int_val = 0    }, false },
 
-    { "hostname",   StringValue, { .str_val = ""   }, { .str_val = NULL }, false },
+    { "boot_mode",  IntValue,    { .int_val = 0              }, { .int_val = 0    }, false },
 
-    { "wifi_ssid",  StringValue, { .str_val = ""   }, { .str_val = NULL }, false },
-    { "wifi_pass",  StringValue, { .str_val = ""   }, { .str_val = NULL }, false },
+    { "hostname",   StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
 
-    { "mqtt_host",  StringValue, { .str_val = ""   }, { .str_val = NULL }, false },
-    { "mqtt_port",  IntValue,    { .int_val = 1883 }, { .int_val = 0    }, false },
-    { "mqtt_user",  StringValue, { .str_val = ""   }, { .str_val = NULL }, false },
-    { "mqtt_pass",  StringValue, { .str_val = ""   }, { .str_val = NULL }, false },
+    { "wifi_ssid",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
+    { "wifi_pass",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
+
+    { "mqtt_host",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
+    { "mqtt_port",  IntValue,    { .int_val = 1883           }, { .int_val = 0    }, false },
+    { "mqtt_user",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
+    { "mqtt_pass",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
 };
 
 BBL_STATIC_ASSERT(BBL_SIZEOF_ARRAY(bbl_config_items) == ConfigKeyCount);
 
 static void bbl_config_set_strval(bbl_config_item_t *item, const char *value)
 {
+    if (value == NULL) {
+        return;
+    }
+
     if (item->value.str_val == value) {
         return;
     }
@@ -59,12 +65,10 @@ static void bbl_config_set_strval(bbl_config_item_t *item, const char *value)
         free(item->value.str_val);
     }
 
-    if (value) {
-        if (strcmp(value, item->default_value.str_val) == 0) {
-            value = item->default_value.str_val;
-        } else {
-            value = strdup(value);
-        }
+    if (strcmp(value, item->default_value.str_val) == 0) {
+        value = item->default_value.str_val;
+    } else {
+        value = strdup(value);
     }
 
     item->value.str_val = value;
@@ -95,6 +99,10 @@ void bbl_config_init()
     }
 
     for (int i = 0; i < BBL_SIZEOF_ARRAY(bbl_config_items); ++i) {
+        if (bbl_config_items[i].read_only) {
+            continue;
+        }
+
         switch (bbl_config_items[i].type) {
         case StringValue: {
             char buf[256];
@@ -113,8 +121,8 @@ void bbl_config_init()
     }
 
     int boot_count = bbl_config_get_int(ConfigKeyBootCount) + 1;
-    if (strcmp(BBL_FIRMWARE_BUILD, bbl_config_get_string(ConfigKeyBuildDate)) != 0) {
-        nvs_set_str(h, bbl_config_items[ConfigKeyBuildDate].name, BBL_FIRMWARE_BUILD);
+    if (strcmp(BBL_BUILD_DATE, bbl_config_get_string(ConfigKeyBuildDate)) != 0) {
+        nvs_set_str(h, bbl_config_items[ConfigKeyBuildDate].name, BBL_BUILD_DATE);
         boot_count = 1;
     }
     bbl_config_items[ConfigKeyBootCount].value.int_val = boot_count;

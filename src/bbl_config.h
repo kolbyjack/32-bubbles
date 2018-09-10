@@ -10,9 +10,11 @@ typedef enum bbl_config_key bbl_config_key_t;
 typedef enum bbl_boot_mode bbl_boot_mode_t;
 
 enum bbl_config_key {
-    ConfigKeyBootMode,
-    ConfigKeyBootCount,
+    ConfigKeyVersion,
     ConfigKeyBuildDate,
+    ConfigKeyBootCount,
+
+    ConfigKeyBootMode,
 
     ConfigKeyHostname,
 
