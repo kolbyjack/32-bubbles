@@ -10,8 +10,8 @@ LEVELS = ["major", "minor", "rev", "patch"]
 # TODO: Get from sys.argv
 bump = None
 
-src_hash = hashlib.sha256()
-httpd_res_hash = hashlib.sha256()
+src_hash = hashlib.sha1()
+httpd_res_hash = hashlib.sha1()
 
 for subdir in ("src", "res"):
     for root, dirs, files in os.walk(subdir):

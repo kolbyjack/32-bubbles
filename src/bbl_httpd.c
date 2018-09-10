@@ -306,19 +306,15 @@ static void httpd_get_config(http_client_t *client)
         "{"
             "\"hostname\": \"%js\","
             "\"wifi_ssid\": \"%js\","
-            "\"wifi_pass\": \"%js\","
             "\"mqtt_host\": \"%js\","
             "\"mqtt_port\": %u,"
-            "\"mqtt_user\": \"%js\","
-            "\"mqtt_pass\": \"%js\""
+            "\"mqtt_user\": \"%js\""
         "}",
         bbl_config_get_string(ConfigKeyHostname),
         bbl_config_get_string(ConfigKeyWiFiSSID),
-        bbl_config_get_string(ConfigKeyWiFiPass),
         bbl_config_get_string(ConfigKeyMQTTHost),
         bbl_config_get_int(ConfigKeyMQTTPort),
-        bbl_config_get_string(ConfigKeyMQTTUser),
-        bbl_config_get_string(ConfigKeyMQTTPass)
+        bbl_config_get_string(ConfigKeyMQTTUser)
     );
 
     write(client->sock, STRING_LITERAL_PARAM(
@@ -357,10 +353,15 @@ static void httpd_post_config(http_client_t *client)
             break;
 
         case ConfigKeyWiFiSSID:
-        case ConfigKeyWiFiPass:
         case ConfigKeyMQTTUser:
-        case ConfigKeyMQTTPass:
             bbl_config_set_string(key, client->argv[i].value);
+            break;
+
+        case ConfigKeyWiFiPass:
+        case ConfigKeyMQTTPass:
+            if (client->argv[i].value[0] != 0) {
+                bbl_config_set_string(key, client->argv[i].value);
+            }
             break;
 
         case ConfigKeyMQTTPort:
