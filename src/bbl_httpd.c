@@ -4,33 +4,40 @@
 #include "bbl_config.h"
 #include "bbl_utils.h"
 #include "bbl_wifi.h"
+#include "bbl_httpd_resources.h"
 
-#include "http_parser.h"
-#include "lwip/sockets.h"
+#include <esp_ota_ops.h>
+#include <http_parser.h>
+#include <lwip/sockets.h>
 
 #define STRING_LITERAL_PARAM(x) x, sizeof(x) - 1
-#define httpd_check_url(u) (client.url.field_data[UF_PATH].len == sizeof(u) - 1 && strncmp(&client.request_uri[client.url.field_data[UF_PATH].off], u, sizeof(u) - 1) == 0)
-
-BBL_INCLUDE_RESOURCE(index, "res/index.html");
-BBL_INCLUDE_RESOURCE(favicon, "res/bubbles.png");
+#define HTTP_BUFSIZ 4096
 
 typedef struct http_client http_client_t;
 typedef struct http_parser_url http_parser_url_t;
+typedef struct http_keyvalue http_keyvalue_t;
+
+struct http_keyvalue
+{
+    const char *key;
+    const char *value;
+};
 
 struct http_client
 {
     http_parser parser;
+    http_parser_settings parser_settings;
     http_parser_url_t url;
     int sock;
 
+    bool headers_complete;
     bool parsing_complete;
 
-    size_t bufsiz;
-    char *inbuf;
-    size_t incnt;
-    char *in_headers[32];
-    int inhdr_idx;
-    char *inhdr_end;
+    char inbuf[HTTP_BUFSIZ];
+    size_t inbuf_used;
+    http_keyvalue_t headers_in[32];
+    int headers_in_count;
+    char *headers_in_end;
 
     char *request_uri;
     size_t request_uri_len;
@@ -38,10 +45,10 @@ struct http_client
     char *request_body;
     size_t request_body_len;
 
-    char *varbuf;
-    size_t varcnt;
+    char varbuf[HTTP_BUFSIZ];
+    size_t varbuf_used;
     int argc;
-    char *argv[64];
+    http_keyvalue_t argv[32];
 };
 
 static char *sanitize_hostname(char *str)
@@ -80,57 +87,47 @@ static int pack_byte(const char *p)
     return ret;
 }
 
-static size_t urldecode(char *dest, size_t destlen, const char *src, size_t srclen)
+static size_t urldecode(http_client_t *client, char **dest, const char *src, size_t srclen)
 {
-    size_t outlen = 0;
+    size_t varbuf_free = sizeof(client->varbuf) - client->varbuf_used;
+    size_t decoded_len = 0;
     int i;
 
-    if (0 == destlen)
+    *dest = client->varbuf + client->varbuf_used;
+
+    if (0 == varbuf_free)
         return 0;
 
-    while (*src && srclen-- && outlen + 1 < destlen) {
+    while (*src && srclen-- && decoded_len + 1 < varbuf_free) {
         if ('%' == *src && srclen > 2 && (i = pack_byte(src + 1)) >= 0) {
-            dest[outlen++] = i;
+            (*dest)[decoded_len++] = i;
             src += 3;
         } else {
-            dest[outlen++] = *src++;
+            (*dest)[decoded_len++] = *src++;
         }
     }
-    dest[outlen] = 0;
+    (*dest)[decoded_len] = 0;
 
-    return outlen;
-}
+    client->varbuf_used += decoded_len + 1;
 
-static size_t add_var(http_client_t *client, char **var, const char *src, size_t srclen)
-{
-    size_t destlen = client->bufsiz - client->varcnt;
-
-    *var = client->varbuf + client->varcnt;
-    destlen = urldecode(*var, destlen, src, srclen);
-    client->varcnt += destlen + 1;
-
-    return destlen;
+    return decoded_len;
 }
 
 static void split_args(http_client_t *client, const char *args)
 {
-    int i = 0, n;
-
     client->argc = 0;
     if (args == NULL || *args == 0)
         return;
 
-    while (*args && i < BBL_SIZEOF_ARRAY(client->argv)) {
-        n = strcspn(args, "=&");
-        add_var(client, &client->argv[i++], args, n);
-        args += n + (0 != args[n] && '&' != args[n]);
+    for (; *args && client->argc < BBL_SIZEOF_ARRAY(client->argv); ++client->argc) {
+        int n = strcspn(args, "=&");
+        urldecode(client, &client->argv[client->argc].key, args, n);
+        args += n + (args[n] != 0 && args[n] != '&');
 
         n = strcspn(args, "&");
-        add_var(client, &client->argv[i++], args, n);
-        args += n + (0 != args[n]);
+        urldecode(client, &client->argv[client->argc].value, args, n);
+        args += n + (args[n] != 0);
     }
-
-    client->argc = i;
 }
 
 static int httpd_on_url(http_parser* parser, const char *at, size_t length)
@@ -148,13 +145,14 @@ static int httpd_on_header_field(http_parser *parser, const char *at, size_t len
 {
     http_client_t *client = parser->data;
 
-    if (client->inhdr_idx & 1) {
-        if (client->inhdr_idx > 0) {
-            *client->inhdr_end = 0;
+    if (client->headers_in_count & 1) {
+        if (client->headers_in_end != NULL) {
+            *client->headers_in_end = 0;
         }
-        client->in_headers[++client->inhdr_idx] = client->inhdr_end = (char *)at;
+        client->headers_in[++client->headers_in_count / 2].key = at;
+        client->headers_in_end = (char *)at;
     }
-    client->inhdr_end += length;
+    client->headers_in_end += length;
 
     return 0;
 }
@@ -163,11 +161,12 @@ static int httpd_on_header_value(http_parser* parser, const char *at, size_t len
 {
     http_client_t *client = parser->data;
 
-    if (!(client->inhdr_idx & 1)) {
-        *client->inhdr_end = 0;
-        client->in_headers[++client->inhdr_idx] = client->inhdr_end = (char *)at;
+    if (!(client->headers_in_count & 1)) {
+        *client->headers_in_end = 0;
+        client->headers_in[++client->headers_in_count / 2].value = at;
+        client->headers_in_end = (char *)at;
     }
-    client->inhdr_end += length;
+    client->headers_in_end += length;
 
     return 0;
 }
@@ -184,17 +183,16 @@ static int httpd_on_body(http_parser* parser, const char *at, size_t length)
     return 0;
 }
 
-static int httpd_on_message_complete(http_parser* parser)
+static int httpd_on_headers_complete(http_parser* parser)
 {
     http_client_t *client = parser->data;
 
-    ++client->inhdr_idx;
-    *client->inhdr_end = 0;
-    if (client->request_uri) {
-        client->request_uri[client->request_uri_len] = 0;
+    client->headers_in_count = (client->headers_in_count + 1) / 2;
+    if (client->headers_in_end != NULL) {
+        *client->headers_in_end = 0;
     }
-    if (client->request_body) {
-        client->request_body[client->request_body_len] = 0;
+    if (client->request_uri != NULL) {
+        client->request_uri[client->request_uri_len] = 0;
     }
 
     http_parser_parse_url(client->request_uri, client->request_uri_len,
@@ -203,8 +201,23 @@ static int httpd_on_message_complete(http_parser* parser)
     if (parser->method == HTTP_GET && (client->url.field_set & (1 << UF_QUERY)) != 0) {
         const char *query_string = client->request_uri + client->url.field_data[UF_QUERY].off;
         split_args(client, query_string);
-    } else if (parser->method == HTTP_POST) {
-        split_args(client, client->request_body);
+    }
+
+    client->headers_complete = true;
+
+    return 0;
+}
+
+static int httpd_on_message_complete(http_parser *parser)
+{
+    http_client_t *client = parser->data;
+
+    if (client->request_body) {
+        client->request_body[client->request_body_len] = 0;
+
+        if (parser->method == HTTP_POST) {
+            split_args(client, client->request_body);
+        }
     }
 
     client->parsing_complete = true;
@@ -212,23 +225,265 @@ static int httpd_on_message_complete(http_parser* parser)
     return 0;
 }
 
+static void httpd_client_init(http_client_t *client, int sock)
+{
+    memset(client, 0, sizeof(*client));
+
+    http_parser_init(&client->parser, HTTP_REQUEST);
+    client->parser.data = client;
+
+    http_parser_url_init(&client->url);
+
+    client->sock = sock;
+    //client->headers_complete = false;
+    //client->parsing_complete = false;
+    //client->inbuf_used = 0;
+    client->headers_in_count = -1;
+    //client->headers_in_end = NULL;
+    //client->request_uri = NULL;
+    //client->request_uri_len = 0;
+    //client->request_body = NULL;
+    //client->request_body_len = 0;
+    //client->varbuf_used = 0;
+    //client->argc = 0;
+
+    client->parser_settings.on_url = httpd_on_url;
+    client->parser_settings.on_header_field = httpd_on_header_field;
+    client->parser_settings.on_header_value = httpd_on_header_value;
+    client->parser_settings.on_headers_complete = httpd_on_headers_complete;
+    client->parser_settings.on_body = httpd_on_body;
+    client->parser_settings.on_message_complete = httpd_on_message_complete;
+}
+
+static void httpd_read_headers(http_client_t *client)
+{
+    do {
+        char *p = client->inbuf + client->inbuf_used;
+        int n = sizeof(client->inbuf) - client->inbuf_used - 1;
+
+        if ((n = read(client->sock, p, n)) <= 0) {
+            break;
+        }
+
+        http_parser_execute(&client->parser, &client->parser_settings, p, n);
+        client->inbuf_used += n;
+    } while (!client->headers_complete && client->inbuf_used + 1 < sizeof(client->inbuf));
+}
+
+static void httpd_read_body(http_client_t *client)
+{
+    while (!client->parsing_complete && client->inbuf_used + 1 < sizeof(client->inbuf)) {
+        char *p = client->inbuf + client->inbuf_used;
+        int n = sizeof(client->inbuf) - client->inbuf_used - 1;
+
+        if ((n = read(client->sock, p, n)) <= 0) {
+            break;
+        }
+
+        http_parser_execute(&client->parser, &client->parser_settings, p, n);
+        client->inbuf_used += n;
+    }
+}
+
+static void httpd_get_index(http_client_t *client)
+{
+    write(client->sock, STRING_LITERAL_PARAM(
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Close\r\n"
+        "Content-Type: text/html\r\n"
+        "\r\n"
+    ));
+
+    write(client->sock, BBL_RESOURCE(index), BBL_SIZEOF_RESOURCE(index));
+}
+
+static void httpd_get_config(http_client_t *client)
+{
+    char response[512];
+    size_t response_len;
+
+    response_len = bbl_snprintf(response, sizeof(response),
+        "{"
+            "\"hostname\": \"%js\","
+            "\"wifi_ssid\": \"%js\","
+            "\"wifi_pass\": \"%js\","
+            "\"mqtt_host\": \"%js\","
+            "\"mqtt_port\": %u,"
+            "\"mqtt_user\": \"%js\","
+            "\"mqtt_pass\": \"%js\""
+        "}",
+        bbl_config_get_string(ConfigKeyHostname),
+        bbl_config_get_string(ConfigKeyWiFiSSID),
+        bbl_config_get_string(ConfigKeyWiFiPass),
+        bbl_config_get_string(ConfigKeyMQTTHost),
+        bbl_config_get_int(ConfigKeyMQTTPort),
+        bbl_config_get_string(ConfigKeyMQTTUser),
+        bbl_config_get_string(ConfigKeyMQTTPass)
+    );
+
+    write(client->sock, STRING_LITERAL_PARAM(
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Close\r\n"
+        "Content-Type: application/json\r\n"
+        "\r\n"
+    ));
+
+    write(client->sock, response, response_len);
+}
+
+static void httpd_post_config(http_client_t *client)
+{
+    httpd_read_body(client);
+
+    if (!client->parsing_complete) {
+        return;
+    }
+
+    write(client->sock, STRING_LITERAL_PARAM(
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Close\r\n"
+        "Content-Type: text/html\r\n"
+        "\r\n"
+        "Configuration applied!  Rebooting."
+    ));
+
+    for (int i = 0; i < client->argc; ++i) {
+        bbl_config_key_t key = bbl_config_lookup_key(client->argv[i].key);
+
+        switch (key) {
+        case ConfigKeyHostname:
+        case ConfigKeyMQTTHost:
+            bbl_config_set_string(key, sanitize_hostname(client->argv[i].value));
+            break;
+
+        case ConfigKeyWiFiSSID:
+        case ConfigKeyWiFiPass:
+        case ConfigKeyMQTTUser:
+        case ConfigKeyMQTTPass:
+            bbl_config_set_string(key, client->argv[i].value);
+            break;
+
+        case ConfigKeyMQTTPort:
+            bbl_config_set_int(key, atoi(client->argv[i].value));
+            break;
+        }
+    }
+
+    bbl_config_set_int(ConfigKeyBootMode, BootModeNormal);
+    bbl_config_save();
+    close(client->sock);
+    esp_restart();
+}
+
+#if 0
+static void httpd_put_firmware(http_client_t *client)
+{
+    esp_err_t err;
+    esp_ota_handle_t update_handle = NULL;
+    const esp_partition_t *update_partition;
+
+    update_partition = esp_ota_get_next_update_partition(NULL);
+    if (update_partition == NULL) {
+        return;
+    }
+
+    err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
+    if (err != ESP_OK || update_handle == NULL) {
+        return;
+    }
+
+    if (client->request_body_len > 0) {
+        err = esp_ota_write(update_handle, client->request_body, client->request_body_len);
+    }
+
+    while (err == ESP_OK) {
+        client->inbuf_used = read(client->sock, client->inbuf, sizeof(client->inbuf));
+
+        if (client->inbuf_used > 0) {
+            err = esp_ota_write(update_handle, client->inbuf, client->inbuf_used);
+        } else if (client->inbuf_used < 0) {
+            err = ESP_ERR_INVALID_RESPONSE;
+        }
+    }
+
+    if (esp_ota_end(update_handle) != ESP_OK) {
+        return;
+    }
+
+    if (err == ESP_OK && esp_ota_set_boot_partition(update_partition) == ESP_OK) {
+        esp_restart();
+    }
+}
+#endif
+
+static void httpd_get_favicon(http_client_t *client)
+{
+    write(client->sock, STRING_LITERAL_PARAM(
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Close\r\n"
+        "Content-Type: image/png\r\n"
+        "\r\n"
+    ));
+
+    write(client->sock, BBL_RESOURCE(favicon), BBL_SIZEOF_RESOURCE(favicon));
+}
+
+static void httpd_404(http_client_t *client)
+{
+    write(client->sock, STRING_LITERAL_PARAM(
+        "HTTP/1.1 404 Not Found\r\n"
+        "Connection: Close\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "Not Found"
+    ));
+}
+
+static bool httpd_check_url(http_client_t *client, const char *url)
+{
+    size_t url_len = strlen(url);
+
+    if ((client->url.field_set & (1 << UF_PATH)) == 0) {
+        return false;
+    }
+
+    if (client->url.field_data[UF_PATH].len != url_len) {
+        return false;
+    }
+
+    const char *request_url = &client->request_uri[client->url.field_data[UF_PATH].off];
+    return (strncmp(request_url, url, url_len) == 0);
+}
+
+static void httpd_route_request(http_client_t *client)
+{
+    if (httpd_check_url(client, "/") && client->parser.method == HTTP_GET) {
+        httpd_get_index(client);
+    } else if (httpd_check_url(client, "/config")) {
+        if (client->parser.method == HTTP_GET) {
+            httpd_get_config(client);
+        } else if (client->parser.method == HTTP_POST) {
+            httpd_post_config(client);
+        } else {
+            httpd_404(client);
+        }
+#if 0
+    } else if (httpd_check_url(client, "/firmware") && client->parser.method == HTTP_PUT) {
+        httpd_put_firmware(client);
+#endif
+    } else if (httpd_check_url(client, "/favicon.ico") && client->parser.method == HTTP_GET) {
+        httpd_get_favicon(client);
+    } else {
+        httpd_404(client);
+    }
+}
+
 static void httpd_task_thread()
 {
     int httpd_sock = -1;
-    http_client_t client;
-    http_parser_settings parser_settings = {
-        .on_url = httpd_on_url,
-        .on_header_field = httpd_on_header_field,
-        .on_header_value = httpd_on_header_value,
-        .on_body = httpd_on_body,
-        .on_message_complete = httpd_on_message_complete,
-    };
+    int client_sock;
+    http_client_t *client = malloc(sizeof(http_client_t));
     struct sockaddr_in sock_addr;
-
-    static const size_t BUFFER_SIZE = 4096;
-    client.bufsiz = BUFFER_SIZE;
-    client.inbuf = malloc(client.bufsiz);
-    client.varbuf = malloc(client.bufsiz);
 
     for (;;) {
         if (httpd_sock != -1) {
@@ -254,136 +509,19 @@ static void httpd_task_thread()
             continue;
         }
 
-        while ((client.sock = accept(httpd_sock, NULL, NULL)) >= 0) {
-            http_parser_init(&client.parser, HTTP_REQUEST);
-            client.parser.data = &client;
+        while ((client_sock = accept(httpd_sock, NULL, NULL)) >= 0) {
+            httpd_client_init(client, client_sock);
+            httpd_read_headers(client);
 
-            http_parser_url_init(&client.url);
-            client.parsing_complete = false;
-            client.incnt = 0;
-            client.inhdr_idx = -1;
-            client.request_uri = NULL;
-            client.request_uri_len = 0;
-            client.request_body = NULL;
-            client.request_body_len = 0;
-            client.varcnt = 0;
-            client.argc = 0;
-
-            do {
-                char *p = client.inbuf + client.incnt;
-                int n = client.bufsiz - client.incnt - 1;
-
-                if ((n = read(client.sock, p, n)) <= 0) {
-                    break;
-                }
-
-                http_parser_execute(&client.parser, &parser_settings, p, n);
-                client.incnt += n;
-            } while (!client.parsing_complete && client.incnt + 1 < client.bufsiz);
-
-            if (client.parsing_complete) {
-                if ((client.url.field_set & (1 << UF_PATH)) == 0) {
-                    // Bad request
-                } else if (httpd_check_url("/")) {
-                    write(client.sock, STRING_LITERAL_PARAM(
-                        "HTTP/1.1 200 OK\r\n"
-                        "Connection: Close\r\n"
-                        "Content-Type: text/html\r\n"
-                        "\r\n"
-                    ));
-
-                    write(client.sock, BBL_RESOURCE(index), BBL_SIZEOF_RESOURCE(index));
-                } else if (httpd_check_url("/config")) {
-                    if (client.parser.method == HTTP_GET) {
-                        char response[512];
-                        size_t response_len;
-
-                        response_len = bbl_snprintf(response, sizeof(response),
-                            "{"
-                                "\"hostname\": \"%js\","
-                                "\"wifi_ssid\": \"%js\","
-                                "\"wifi_pass\": \"%js\","
-                                "\"mqtt_host\": \"%js\","
-                                "\"mqtt_port\": %u,"
-                                "\"mqtt_user\": \"%js\","
-                                "\"mqtt_pass\": \"%js\""
-                            "}",
-                            bbl_config_get_string(ConfigKeyHostname),
-                            bbl_config_get_string(ConfigKeyWiFiSSID),
-                            bbl_config_get_string(ConfigKeyWiFiPass),
-                            bbl_config_get_string(ConfigKeyMQTTHost),
-                            bbl_config_get_int(ConfigKeyMQTTPort),
-                            bbl_config_get_string(ConfigKeyMQTTUser),
-                            bbl_config_get_string(ConfigKeyMQTTPass)
-                        );
-
-                        write(client.sock, STRING_LITERAL_PARAM(
-                            "HTTP/1.1 200 OK\r\n"
-                            "Connection: Close\r\n"
-                            "Content-Type: application/json\r\n"
-                            "\r\n"
-                        ));
-
-                        write(client.sock, response, response_len);
-                    } else if (client.parser.method == HTTP_POST) {
-                        write(client.sock, STRING_LITERAL_PARAM(
-                            "HTTP/1.1 200 OK\r\n"
-                            "Connection: Close\r\n"
-                            "Content-Type: text/html\r\n"
-                            "\r\n"
-                            "Configuration applied!  Rebooting."
-                        ));
-
-                        for (int i = 0; i < client.argc; i += 2) {
-                            bbl_config_key_t key = bbl_config_lookup_key(client.argv[i]);
-
-                            switch (key) {
-                            case ConfigKeyHostname:
-                            case ConfigKeyMQTTHost:
-                                bbl_config_set_string(key, sanitize_hostname(client.argv[i + 1]));
-                                break;
-
-                            case ConfigKeyWiFiSSID:
-                            case ConfigKeyWiFiPass:
-                            case ConfigKeyMQTTUser:
-                            case ConfigKeyMQTTPass:
-                                bbl_config_set_string(key, client.argv[i + 1]);
-                                break;
-
-                            case ConfigKeyMQTTPort:
-                                bbl_config_set_int(key, atoi(client.argv[i + 1]));
-                                break;
-                            }
-                        }
-
-                        bbl_config_set_int(ConfigKeyBootMode, BootModeNormal);
-                        bbl_config_save();
-                        close(client.sock);
-                        esp_restart();
-                    }
-                } else if (httpd_check_url("/favicon.ico")) {
-                    write(client.sock, STRING_LITERAL_PARAM(
-                        "HTTP/1.1 200 OK\r\n"
-                        "Connection: Close\r\n"
-                        "Content-Type: image/png\r\n"
-                        "\r\n"
-                    ));
-
-                    write(client.sock, BBL_RESOURCE(favicon), BBL_SIZEOF_RESOURCE(favicon));
-                } else {
-                    write(client.sock, STRING_LITERAL_PARAM(
-                        "HTTP/1.1 404 Not Found\r\n"
-                        "Connection: Close\r\n"
-                        "Content-Type: text/plain\r\n"
-                        "\r\n"
-                        "Not Found"
-                    ));
-                }
+            if (client->headers_complete) {
+                httpd_route_request(client);
             }
 
-            close(client.sock);
+            close(client->sock);
         }
     }
+
+    free(client);
 
     vTaskDelete(NULL);
 }

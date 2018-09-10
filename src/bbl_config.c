@@ -98,31 +98,56 @@ void bbl_config_init()
         return;
     }
 
+    bool new_firmware = false;
     for (int i = 0; i < BBL_SIZEOF_ARRAY(bbl_config_items); ++i) {
-        if (bbl_config_items[i].read_only) {
-            continue;
-        }
+        bbl_config_item_t *item = &bbl_config_items[i];
 
-        switch (bbl_config_items[i].type) {
+        switch (item->type) {
         case StringValue: {
             char buf[256];
             size_t buflen = sizeof(buf);
 
-            if (nvs_get_str(h, bbl_config_items[i].name, buf, &buflen) == ESP_OK) {
-                bbl_config_set_strval(&bbl_config_items[i], buf);
+            if (nvs_get_str(h, item->name, buf, &buflen) == ESP_OK) {
+                if (item->read_only) {
+                    new_firmware = new_firmware || (strcmp(item->value.int_val, buf) != 0);
+                } else {
+                    bbl_config_set_strval(item, buf);
+                }
             }
             break;
         }
 
-        case IntValue:
-            nvs_get_i32(h, bbl_config_items[i].name, &bbl_config_items[i].value.int_val);
+        case IntValue: {
+            int value;
+            nvs_get_i32(h, item->name, &value);
+            if (item->read_only) {
+                new_firmware = new_firmware || (item->value.int_val != value);
+            } else {
+                item->value.int_val = value;
+            }
             break;
+        }
         }
     }
 
     int boot_count = bbl_config_get_int(ConfigKeyBootCount) + 1;
-    if (strcmp(BBL_BUILD_DATE, bbl_config_get_string(ConfigKeyBuildDate)) != 0) {
-        nvs_set_str(h, bbl_config_items[ConfigKeyBuildDate].name, BBL_BUILD_DATE);
+    if (new_firmware) {
+        for (int i = 0; i < BBL_SIZEOF_ARRAY(bbl_config_items); ++i) {
+            bbl_config_item_t *item = &bbl_config_items[i];
+
+            if (item->read_only) {
+                switch (item->type) {
+                case StringValue:
+                    nvs_set_str(h, item->name, item->value.str_val);
+                    break;
+
+                case IntValue:
+                    nvs_set_i32(h, item->name, item->value.int_val);
+                    break;
+                }
+            }
+        }
+
         boot_count = 1;
     }
     bbl_config_items[ConfigKeyBootCount].value.int_val = boot_count;

@@ -10,19 +10,23 @@ LEVELS = ["major", "minor", "rev", "patch"]
 # TODO: Get from sys.argv
 bump = None
 
-hash = hashlib.sha256()
+src_hash = hashlib.sha256()
+httpd_res_hash = hashlib.sha256()
 
 for subdir in ("src", "res"):
     for root, dirs, files in os.walk(subdir):
         for name in files:
-            if subdir == "src" and name == "bbl_version.h":
+            if subdir == "src" and name in ["bbl_version.h", "bbl_httpd_resources.h"]:
                 continue
 
             with open(os.path.join(root, name), "rb") as fp:
-                for chunk in iter(lambda: fp.read(4096), b""):
-                    hash.update(chunk)
+                for chunk in iter(lambda: fp.read(32768), b""):
+                    src_hash.update(chunk)
+                    if subdir == "res":
+                        httpd_res_hash.update(chunk)
 
-new_source_hash = '"%s"' % hash.hexdigest()
+new_source_hash = '"%s"' % src_hash.hexdigest()
+new_httpd_resource_hash = '"%s"' % httpd_res_hash.hexdigest()
 
 lines = []
 with open("src/bbl_version.h") as fp:
@@ -44,4 +48,17 @@ with open("src/bbl_version.h") as fp:
 
 if new_source_hash != old_source_hash:
     with open("src/bbl_version.h", "w") as fp:
+        fp.writelines(lines)
+
+lines = []
+with open("src/bbl_httpd_resources.h") as fp:
+    for line in fp:
+        if line.startswith("#define BBL_HTTPD_RESOURCES_HASH"):
+            old_httpd_resource_hash = line[len("#define BBL_HTTPD_RESOURCES_HASH"):].strip()
+            line = "#define BBL_HTTPD_RESOURCES_HASH %s\n" % new_httpd_resource_hash
+
+        lines.append(line)
+
+if new_httpd_resource_hash != old_httpd_resource_hash:
+    with open("src/bbl_httpd_resources.h", "w") as fp:
         fp.writelines(lines)
