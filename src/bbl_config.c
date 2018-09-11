@@ -5,6 +5,7 @@
 #include "bbl_version.h"
 
 #include <nvs.h>
+#include <string.h>
 
 #define BBL_CONFIG_FILENAME "32-bubbles"
 
@@ -77,13 +78,15 @@ static void bbl_config_set_strval(bbl_config_item_t *item, const char *value)
 void bbl_config_reset()
 {
     for (int i = 0; i < BBL_SIZEOF_ARRAY(bbl_config_items); ++i) {
-        switch (bbl_config_items[i].type) {
+        bbl_config_item_t *item = &bbl_config_items[i];
+
+        switch (item->type) {
         case StringValue:
-            bbl_config_set_strval(&bbl_config_items[i], bbl_config_items[i].default_value.str_val);
+            bbl_config_set_strval(item, item->default_value.str_val);
             break;
 
         case IntValue:
-            bbl_config_items[i].value.int_val = bbl_config_items[i].default_value.int_val;
+            item->value.int_val = item->default_value.int_val;
             break;
         }
     }
@@ -109,7 +112,7 @@ void bbl_config_init()
 
             if (nvs_get_str(h, item->name, buf, &buflen) == ESP_OK) {
                 if (item->read_only) {
-                    new_firmware = new_firmware || (strcmp(item->value.int_val, buf) != 0);
+                    new_firmware = new_firmware || (strcmp(item->value.str_val, buf) != 0);
                 } else {
                     bbl_config_set_strval(item, buf);
                 }
@@ -119,11 +122,13 @@ void bbl_config_init()
 
         case IntValue: {
             int value;
-            nvs_get_i32(h, item->name, &value);
-            if (item->read_only) {
-                new_firmware = new_firmware || (item->value.int_val != value);
-            } else {
-                item->value.int_val = value;
+
+            if (nvs_get_i32(h, item->name, &value) == ESP_OK) {
+                if (item->read_only) {
+                    new_firmware = new_firmware || (item->value.int_val != value);
+                } else {
+                    item->value.int_val = value;
+                }
             }
             break;
         }
@@ -166,13 +171,15 @@ void bbl_config_save()
     }
 
     for (int i = 0; i < BBL_SIZEOF_ARRAY(bbl_config_items); ++i) {
-        switch (bbl_config_items[i].type) {
+        bbl_config_item_t *item = &bbl_config_items[i];
+
+        switch (item->type) {
         case StringValue:
-            nvs_set_str(h, bbl_config_items[i].name, bbl_config_items[i].value.str_val);
+            nvs_set_str(h, item->name, item->value.str_val);
             break;
 
         case IntValue:
-            nvs_set_i32(h, bbl_config_items[i].name, bbl_config_items[i].value.int_val);
+            nvs_set_i32(h, item->name, item->value.int_val);
             break;
         }
     }
