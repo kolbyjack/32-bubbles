@@ -9,9 +9,11 @@
 #include <esp_ota_ops.h>
 #include <http_parser.h>
 #include <lwip/sockets.h>
+#include <ctype.h>
+#include <string.h>
 
-#define STRING_LITERAL_PARAM(x) x, sizeof(x) - 1
-#define HTTP_BUFSIZ 4096
+#define STRING_LITERAL_PARAM(x) (x), (sizeof(x) - 1)
+#define HTTP_BUFSIZ 8192
 
 typedef struct http_client http_client_t;
 typedef struct http_parser_url http_parser_url_t;
@@ -33,8 +35,6 @@ struct http_client
     bool headers_complete;
     bool parsing_complete;
 
-    char inbuf[HTTP_BUFSIZ];
-    size_t inbuf_used;
     http_keyvalue_t headers_in[32];
     int headers_in_count;
     char *headers_in_end;
@@ -45,10 +45,11 @@ struct http_client
     char *request_body;
     size_t request_body_len;
 
-    char varbuf[HTTP_BUFSIZ];
-    size_t varbuf_used;
     int argc;
     http_keyvalue_t argv[32];
+
+    char buf[HTTP_BUFSIZ];
+    size_t buf_used;
 };
 
 static char *sanitize_hostname(char *str)
@@ -87,46 +88,40 @@ static int pack_byte(const char *p)
     return ret;
 }
 
-static size_t urldecode(http_client_t *client, char **dest, const char *src, size_t srclen)
+static char *urldecode(char *encoded, const char *delim)
 {
-    size_t varbuf_free = sizeof(client->varbuf) - client->varbuf_used;
-    size_t decoded_len = 0;
-    int i;
+    char *decoded = encoded;
 
-    *dest = client->varbuf + client->varbuf_used;
-
-    if (0 == varbuf_free)
-        return 0;
-
-    while (*src && srclen-- && decoded_len + 1 < varbuf_free) {
-        if ('%' == *src && srclen > 2 && (i = pack_byte(src + 1)) >= 0) {
-            (*dest)[decoded_len++] = i;
-            src += 3;
+    while (*encoded != 0 && strchr(delim, *encoded) == NULL) {
+        if (*encoded == '%' && isxdigit(encoded[1]) && isxdigit(encoded[2])) {
+            *decoded++ = pack_byte(encoded + 1);
+            encoded += 3;
         } else {
-            (*dest)[decoded_len++] = *src++;
+            *decoded++ = *encoded++;
         }
     }
-    (*dest)[decoded_len] = 0;
 
-    client->varbuf_used += decoded_len + 1;
+    if (*encoded != 0) {
+        ++encoded;
+    }
 
-    return decoded_len;
+    *decoded = 0;
+
+    return encoded;
 }
 
-static void split_args(http_client_t *client, const char *args)
+static void decode_args(http_client_t *client, char *buf)
 {
     client->argc = 0;
-    if (args == NULL || *args == 0)
+    if (buf == NULL || *buf == 0)
         return;
 
-    for (; *args && client->argc < BBL_SIZEOF_ARRAY(client->argv); ++client->argc) {
-        int n = strcspn(args, "=&");
-        urldecode(client, &client->argv[client->argc].key, args, n);
-        args += n + (args[n] != 0 && args[n] != '&');
+    for (; *buf && client->argc < BBL_SIZEOF_ARRAY(client->argv); ++client->argc) {
+        http_keyvalue_t *arg = &client->argv[client->argc];
 
-        n = strcspn(args, "&");
-        urldecode(client, &client->argv[client->argc].value, args, n);
-        args += n + (args[n] != 0);
+        arg->key = buf;
+        arg->value = urldecode(buf, "&=");
+        buf = urldecode(arg->value, "&");
     }
 }
 
@@ -191,16 +186,20 @@ static int httpd_on_headers_complete(http_parser* parser)
     if (client->headers_in_end != NULL) {
         *client->headers_in_end = 0;
     }
+
     if (client->request_uri != NULL) {
-        client->request_uri[client->request_uri_len] = 0;
-    }
+        http_parser_parse_url(client->request_uri, client->request_uri_len,
+            client->parser.method == HTTP_CONNECT, &client->url);
 
-    http_parser_parse_url(client->request_uri, client->request_uri_len,
-        client->parser.method == HTTP_CONNECT, &client->url);
+        if ((client->url.field_set & (1 << UF_PATH)) != 0) {
+            char *path = &client->request_uri[client->url.field_data[UF_PATH].off];
+            urldecode(path, "?");
+        }
 
-    if (parser->method == HTTP_GET && (client->url.field_set & (1 << UF_QUERY)) != 0) {
-        const char *query_string = client->request_uri + client->url.field_data[UF_QUERY].off;
-        split_args(client, query_string);
+        if (parser->method == HTTP_GET && (client->url.field_set & (1 << UF_QUERY)) != 0) {
+            const char *query_string = client->request_uri + client->url.field_data[UF_QUERY].off;
+            decode_args(client, query_string);
+        }
     }
 
     client->headers_complete = true;
@@ -216,7 +215,7 @@ static int httpd_on_message_complete(http_parser *parser)
         client->request_body[client->request_body_len] = 0;
 
         if (parser->method == HTTP_POST) {
-            split_args(client, client->request_body);
+            decode_args(client, client->request_body);
         }
     }
 
@@ -237,14 +236,13 @@ static void httpd_client_init(http_client_t *client, int sock)
     client->sock = sock;
     //client->headers_complete = false;
     //client->parsing_complete = false;
-    //client->inbuf_used = 0;
+    //client->buf_used = 0;
     client->headers_in_count = -1;
     //client->headers_in_end = NULL;
     //client->request_uri = NULL;
     //client->request_uri_len = 0;
     //client->request_body = NULL;
     //client->request_body_len = 0;
-    //client->varbuf_used = 0;
     //client->argc = 0;
 
     client->parser_settings.on_url = httpd_on_url;
@@ -258,30 +256,30 @@ static void httpd_client_init(http_client_t *client, int sock)
 static void httpd_read_headers(http_client_t *client)
 {
     do {
-        char *p = client->inbuf + client->inbuf_used;
-        int n = sizeof(client->inbuf) - client->inbuf_used - 1;
+        char *p = client->buf + client->buf_used;
+        int n = sizeof(client->buf) - client->buf_used - 1;
 
         if ((n = read(client->sock, p, n)) <= 0) {
             break;
         }
 
         http_parser_execute(&client->parser, &client->parser_settings, p, n);
-        client->inbuf_used += n;
-    } while (!client->headers_complete && client->inbuf_used + 1 < sizeof(client->inbuf));
+        client->buf_used += n;
+    } while (!client->headers_complete && client->buf_used + 1 < sizeof(client->buf));
 }
 
 static void httpd_read_body(http_client_t *client)
 {
-    while (!client->parsing_complete && client->inbuf_used + 1 < sizeof(client->inbuf)) {
-        char *p = client->inbuf + client->inbuf_used;
-        int n = sizeof(client->inbuf) - client->inbuf_used - 1;
+    while (!client->parsing_complete && client->buf_used + 1 < sizeof(client->buf)) {
+        char *p = client->buf + client->buf_used;
+        int n = sizeof(client->buf) - client->buf_used - 1;
 
         if ((n = read(client->sock, p, n)) <= 0) {
             break;
         }
 
         http_parser_execute(&client->parser, &client->parser_settings, p, n);
-        client->inbuf_used += n;
+        client->buf_used += n;
     }
 }
 
@@ -398,12 +396,14 @@ static void httpd_put_firmware(http_client_t *client)
     }
 
     while (err == ESP_OK) {
-        client->inbuf_used = read(client->sock, client->inbuf, sizeof(client->inbuf));
+        client->buf_used = read(client->sock, client->buf, sizeof(client->buf));
 
-        if (client->inbuf_used > 0) {
-            err = esp_ota_write(update_handle, client->inbuf, client->inbuf_used);
-        } else if (client->inbuf_used < 0) {
+        if (client->buf_used > 0) {
+            err = esp_ota_write(update_handle, client->buf, client->buf_used);
+        } else if (client->buf_used < 0) {
             err = ESP_ERR_INVALID_RESPONSE;
+        } else {
+            break;
         }
     }
 
@@ -452,8 +452,8 @@ static bool httpd_check_url(http_client_t *client, const char *url)
         return false;
     }
 
-    const char *request_url = &client->request_uri[client->url.field_data[UF_PATH].off];
-    return (strncmp(request_url, url, url_len) == 0);
+    const char *path = &client->request_uri[client->url.field_data[UF_PATH].off];
+    return (strncmp(path, url, url_len) == 0);
 }
 
 static void httpd_route_request(http_client_t *client)
