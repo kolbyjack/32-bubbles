@@ -11,6 +11,6 @@ bool bbl_mqtt_connect();
 bool bbl_mqtt_disconnect();
 bool bbl_mqtt_publish(const char *topic, const void *payload, size_t payload_len);
 // TODO: Need to set callbacks for bbl_mqtt_read to invoke
-void bbl_mqtt_read();
+void bbl_mqtt_read(bool block);
 
 #endif

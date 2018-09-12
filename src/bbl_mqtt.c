@@ -4,10 +4,10 @@
 #include "bbl_config.h"
 #include "bbl_wifi.h"
 
-#include <lwip/sockets.h>
-#include <lwip/netdb.h>
+#include <esp_tls.h>
 
-static int mqtt_sock = -1;
+static esp_tls_t *mqtt_conn = NULL;
+static bool mqtt_connack_received = false;
 static uint8_t mqtt_buf[512];
 static size_t mqtt_buf_used;
 static size_t mqtt_skip;
@@ -41,34 +41,23 @@ static size_t mqtt_decode_len(const uint8_t *buf, size_t *len)
 
 static bool mqtt_writev(const struct iovec *iov, int iovcnt)
 {
-    struct iovec iov_buf[16], *iov_local;
-    int written;
+    int iov_written = 0;
 
-    if (iovcnt > LWIP_ARRAYSIZE(iov_buf)) {
-        return false;
-    }
+    for (int i = 0; i < iovcnt; ) {
+        const int to_write = iov[i].iov_len - iov_written;
+        int result = esp_tls_conn_write(mqtt_conn, iov[i].iov_base + iov_written, to_write);
 
-    memcpy(iov_buf, iov, sizeof(iov_buf[0]) * iovcnt);
-    iov_local = iov_buf;
-
-    do {
-        written = lwip_writev_r(mqtt_sock, iov_local, iovcnt);
-        if (written < 0) {
+        if (result >= 0) {
+            iov_written += result;
+            if (iov_written == iov[i].iov_len) {
+                iov_written = 0;
+                ++i;
+            }
+        } else if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) {
             bbl_mqtt_disconnect();
             return false;
         }
-
-        while (written >= iov_local->iov_len) {
-            written -= iov_local->iov_len;
-            ++iov_local;
-            --iovcnt;
-        }
-
-        if (written > 0) {
-            iov_local->iov_base += written;
-            iov_local->iov_len -= written;
-        }
-    } while (iovcnt > 0);
+    }
 
     return true;
 }
@@ -78,27 +67,25 @@ static int mqtt_parse(const uint8_t *buf, size_t len)
     size_t pktlen = 0;
 
     size_t idx = 1;
-    while (idx < len && idx < 5)
-    {
+    while (idx < len && idx < 5) {
         pktlen += (buf[idx] & 0x7f) << (7 * (idx - 1));
-        if ((buf[idx++] & 0x80) == 0)
-        {
+        if ((buf[idx++] & 0x80) == 0) {
             break;
         }
     }
 
-    if (idx + pktlen > len)
-    {
+    if (idx + pktlen > len) {
         return 0;
     }
 
-    if (pktlen > sizeof(mqtt_buf))
-    {
+    if (pktlen > sizeof(mqtt_buf)) {
         mqtt_skip = idx + pktlen - len;
         return len;
     }
 
     // TODO: Actually parse packets
+    mqtt_connack_received = true;
+
     return idx + pktlen;
 }
 
@@ -110,37 +97,27 @@ static void fill_iovec(struct iovec *iov, void *base, size_t len)
 
 bool bbl_mqtt_connect()
 {
-    const struct addrinfo hints = {
-        .ai_family = AF_UNSPEC,
-        .ai_socktype = SOCK_STREAM,
-    };
-    struct addrinfo *res = NULL;
-    char port_buf[8];
-
-    if (mqtt_sock != -1) {
+    if (mqtt_conn != NULL) {
         return true;
     }
 
     const char *host = bbl_config_get_string(ConfigKeyMQTTHost);
     uint16_t port = (uint16_t)bbl_config_get_int(ConfigKeyMQTTPort);
+    bool tls = bbl_config_get_int(ConfigKeyMQTTTLS) != 0;
     const char *id = bbl_config_get_string(ConfigKeyHostname);
     const char *username = bbl_config_get_string(ConfigKeyMQTTUser);
     const char *password = bbl_config_get_string(ConfigKeyMQTTPass);
 
     xEventGroupWaitBits(bbl_wifi_event_group, BBL_WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
 
-    __utoa(port, port_buf, 10);
-    int err = getaddrinfo(host, port_buf, &hints, &res);
-    if (err != 0 || res == NULL) {
-        goto err;
-    }
+    esp_tls_cfg_t cfg = {
+        //.cacert_pem_buf = server_root_cert_pem_start,
+        //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
+        .timeout_ms = -1,
+    };
 
-    mqtt_sock = socket(res->ai_family, res->ai_socktype, 0);
-    if (mqtt_sock < 0) {
-        goto err;
-    }
-
-    if (connect(mqtt_sock, res->ai_addr, res->ai_addrlen) != 0) {
+    mqtt_conn = esp_tls_conn_new(host, strlen(host), port, tls ? &cfg : NULL);
+    if (mqtt_conn == NULL) {
         goto err;
     }
 
@@ -195,20 +172,15 @@ bool bbl_mqtt_connect()
         goto err;
     }
 
-    uint8_t connack_pkt[64];
-    int connack_pkt_size;
-    connack_pkt_size = recv(mqtt_sock, connack_pkt, sizeof(connack_pkt), 0);
-    if (connack_pkt_size <= 0) {
-        goto err;
+    while (!mqtt_connack_received) {
+        bbl_mqtt_read(true);
     }
 
     // TODO: Parse connack_pkt
 
-    freeaddrinfo(res);
     return true;
 
 err:
-    freeaddrinfo(res);
     bbl_sleep(5000);
     bbl_mqtt_disconnect();
     return false;
@@ -216,8 +188,9 @@ err:
 
 bool bbl_mqtt_disconnect()
 {
-    close(mqtt_sock);
-    mqtt_sock = -1;
+    esp_tls_conn_delete(mqtt_conn);
+    mqtt_conn = NULL;
+    mqtt_connack_received = false;
     mqtt_buf_used = 0;
     mqtt_skip = 0;
 
@@ -241,29 +214,43 @@ bool bbl_mqtt_publish(const char *topic, const void *payload, size_t payload_len
         { payload,       payload_len }
     };
 
-    bbl_mqtt_read();
+    bbl_mqtt_read(false);
 
     return mqtt_writev(iov, LWIP_ARRAYSIZE(iov));
 }
 
-void bbl_mqtt_read()
+void bbl_mqtt_read(bool block)
 {
-    int received;
+    while (block || esp_tls_get_bytes_avail(mqtt_conn) > 0) {
+        void *read_ptr = mqtt_buf + mqtt_buf_used;
+        int to_read = sizeof(mqtt_buf) - mqtt_buf_used;
+        ssize_t received = esp_tls_conn_read(mqtt_conn, read_ptr, to_read);
 
-    while ((received = recv(mqtt_sock, mqtt_buf + mqtt_buf_used, sizeof(mqtt_buf) - mqtt_buf_used, MSG_DONTWAIT)) > 0) {
-        if (mqtt_skip >= received) {
-            mqtt_skip -= received;
-            continue;
-        } else if (mqtt_skip > 0) {
-            received -= mqtt_skip;
-            memmove(&mqtt_buf[0], &mqtt_buf[mqtt_skip], received);
-        }
-        mqtt_buf_used += received;
+        if (received == 0) {
+            break;
+        } else if (received > 0) {
+            if (mqtt_skip >= received) {
+                mqtt_skip -= received;
+                continue;
+            } else if (mqtt_skip > 0) {
+                received -= mqtt_skip;
+                memmove(&mqtt_buf[0], &mqtt_buf[mqtt_skip], received);
+                mqtt_skip = 0;
+            }
+            mqtt_buf_used += received;
 
-        int parsed;
-        while ((parsed = mqtt_parse(mqtt_buf + parsed, mqtt_buf_used - parsed)) > 0) {
-            mqtt_buf_used -= parsed;
-            memmove(&mqtt_buf[0], &mqtt_buf[parsed], mqtt_buf_used);
+            int parsed;
+            do {
+                parsed = mqtt_parse(mqtt_buf, mqtt_buf_used);
+                if (parsed > 0) {
+                    mqtt_buf_used -= parsed;
+                    memmove(&mqtt_buf[0], &mqtt_buf[parsed], mqtt_buf_used);
+                    block = false;
+                }
+            } while (mqtt_buf_used > 0 && parsed > 0);
+        } else if (MBEDTLS_ERR_SSL_WANT_READ != received && MBEDTLS_ERR_SSL_WANT_WRITE != received) {
+            bbl_mqtt_disconnect();
+            break;
         }
     }
 }

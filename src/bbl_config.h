@@ -24,6 +24,7 @@ enum bbl_config_key {
 
     ConfigKeyMQTTHost,
     ConfigKeyMQTTPort,
+    ConfigKeyMQTTTLS,
     ConfigKeyMQTTUser,
     ConfigKeyMQTTPass,
 

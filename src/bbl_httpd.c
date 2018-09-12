@@ -306,12 +306,14 @@ static void httpd_get_config(http_client_t *client)
             "\"wifi_ssid\": \"%js\","
             "\"mqtt_host\": \"%js\","
             "\"mqtt_port\": %u,"
+            "\"mqtt_tls\": %s,"
             "\"mqtt_user\": \"%js\""
         "}",
         bbl_config_get_string(ConfigKeyHostname),
         bbl_config_get_string(ConfigKeyWiFiSSID),
         bbl_config_get_string(ConfigKeyMQTTHost),
         bbl_config_get_int(ConfigKeyMQTTPort),
+        bbl_config_get_int(ConfigKeyMQTTTLS) ? "true" : "false",
         bbl_config_get_string(ConfigKeyMQTTUser)
     );
 
@@ -341,6 +343,8 @@ static void httpd_post_config(http_client_t *client)
         "Configuration applied!  Rebooting."
     ));
 
+    bbl_config_set_int(ConfigKeyMQTTTLS, false);
+
     for (int i = 0; i < client->argc; ++i) {
         bbl_config_key_t key = bbl_config_lookup_key(client->argv[i].key);
 
@@ -364,6 +368,10 @@ static void httpd_post_config(http_client_t *client)
 
         case ConfigKeyMQTTPort:
             bbl_config_set_int(key, atoi(client->argv[i].value));
+            break;
+
+        case ConfigKeyMQTTTLS:
+            bbl_config_set_int(key, true);
             break;
         }
     }

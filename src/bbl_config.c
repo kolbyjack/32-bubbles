@@ -43,6 +43,7 @@ static bbl_config_item_t bbl_config_items[] =
 
     { "mqtt_host",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
     { "mqtt_port",  IntValue,    { .int_val = 1883           }, { .int_val = 0    }, false },
+    { "mqtt_tls",   IntValue,    { .int_val = 0              }, { .int_val = 0    }, false },
     { "mqtt_user",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
     { "mqtt_pass",  StringValue, { .str_val = ""             }, { .str_val = NULL }, false },
 };
