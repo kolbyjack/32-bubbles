@@ -21,6 +21,7 @@ typedef struct bbl_ota_client bbl_ota_client_t;
 typedef struct bbl_ota_header bbl_ota_header_t;
 typedef struct http_parser_url http_parser_url_t;
 
+bool bbl_ota_check_performed = false;
 const char *bbl_ota_firmware_url = NULL;
 const char *bbl_ota_changelog_url = NULL;
 uint32_t bbl_ota_release_id = 0;
@@ -418,6 +419,11 @@ static void bbl_ota_client_init(bbl_ota_client_t *client)
 
 bool bbl_ota_refresh_info()
 {
+    // Only check once per boot
+    if (bbl_ota_check_performed) {
+        return bbl_ota_update_available();
+    }
+
     esp_tls_cfg_t cfg = {
         //.cacert_pem_buf = server_root_cert_pem_start,
         //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
@@ -466,6 +472,7 @@ bool bbl_ota_refresh_info()
     // TODO: Handle redirection
     if (client->parsing_complete) {
         bbl_ota_parse_response(client);
+        bbl_ota_check_performed = true;
     }
 
 exit:
