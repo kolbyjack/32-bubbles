@@ -435,10 +435,7 @@ static void httpd_download_update(http_client_t *client)
 
     write(client->sock, response, response_len);
 
-    // TODO: Only create one task
-    if (bbl_ota_update_available()) {
-        xTaskCreate(bbl_ota_download_update, "update", 8192, NULL, 5, NULL);
-    }
+    bbl_ota_download_update();
 }
 
 static void httpd_404(http_client_t *client)

@@ -21,10 +21,11 @@ typedef struct bbl_ota_client bbl_ota_client_t;
 typedef struct bbl_ota_header bbl_ota_header_t;
 typedef struct http_parser_url http_parser_url_t;
 
-bool bbl_ota_check_performed = false;
-const char *bbl_ota_firmware_url = NULL;
-const char *bbl_ota_changelog_url = NULL;
-uint32_t bbl_ota_release_id = 0;
+static bool bbl_ota_check_performed = false;
+static const char *bbl_ota_firmware_url = NULL;
+static const char *bbl_ota_changelog_url = NULL;
+static uint32_t bbl_ota_release_id = 0;
+static BaseType_t bbl_ota_download_task = 0;
 
 struct bbl_ota_header
 {
@@ -417,82 +418,8 @@ static void bbl_ota_client_init(bbl_ota_client_t *client)
     client->parser_settings.on_message_complete = bbl_ota_on_message_complete;
 }
 
-bool bbl_ota_refresh_info()
+static void bbl_ota_download_update_thread(void *ctx)
 {
-    // Only check once per boot
-    if (bbl_ota_check_performed) {
-        return bbl_ota_update_available();
-    }
-
-    esp_tls_cfg_t cfg = {
-        //.cacert_pem_buf = server_root_cert_pem_start,
-        //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
-        .timeout_ms = -1,
-    };
-
-    bbl_ota_client_t *client = malloc(sizeof(bbl_ota_client_t));
-    bbl_ota_client_init(client);
-
-    client->tls = esp_tls_conn_new(BBL_STRING_LITERAL_PARAM(OTA_UPDATE_HOST), 443, &cfg);
-    if (client->tls == NULL) {
-        goto exit;
-    }
-
-    size_t buflen = snprintf(client->buf, sizeof(client->buf),
-        "GET %s HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "User-Agent: 32-bubbles (http://github.com/kolbyjack/32-bubbles/\r\n"
-        "Connection: Close\r\n"
-        "\r\n"
-        , OTA_UPDATE_PATH
-        , OTA_UPDATE_HOST
-    );
-
-    for (size_t written_bytes = 0; written_bytes < buflen; ) {
-        ssize_t result = esp_tls_conn_write(client->tls, client->buf + written_bytes, buflen - written_bytes);
-        if (result >= 0) {
-            written_bytes += result;
-        } else if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) {
-            goto exit;
-        }
-    }
-
-    while (!client->parsing_complete) {
-        ssize_t result = esp_tls_conn_read(client->tls, client->buf + client->buf_used,
-            sizeof(client->buf) - client->buf_used);
-
-        if (result > 0) {
-            http_parser_execute(&client->parser, &client->parser_settings, client->buf + client->buf_used, result);
-            client->buf_used += result;
-        } else if (result < 0 && result != MBEDTLS_ERR_SSL_WANT_WRITE && result != MBEDTLS_ERR_SSL_WANT_READ) {
-            break;
-        }
-    }
-
-    // TODO: Handle redirection
-    if (client->parsing_complete) {
-        bbl_ota_parse_response(client);
-        bbl_ota_check_performed = true;
-    }
-
-exit:
-    esp_tls_conn_delete(client->tls);
-    free(client);
-
-    return bbl_ota_update_available();
-}
-
-bool bbl_ota_update_available()
-{
-    return bbl_ota_firmware_url != NULL && bbl_ota_release_id != 0 && bbl_ota_release_id != bbl_config_get_int(ConfigKeyReleaseID);
-}
-
-bool bbl_ota_download_update()
-{
-    if (!bbl_ota_update_available()) {
-        return false;
-    }
-
     esp_tls_cfg_t cfg = {
         //.cacert_pem_buf = server_root_cert_pem_start,
         //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
@@ -578,6 +505,89 @@ done:
     free(client);
 
     return false;
+}
+
+bool bbl_ota_refresh_info()
+{
+    // Only check once per boot
+    if (bbl_ota_check_performed) {
+        return bbl_ota_update_available();
+    }
+
+    esp_tls_cfg_t cfg = {
+        //.cacert_pem_buf = server_root_cert_pem_start,
+        //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
+        .timeout_ms = -1,
+    };
+
+    bbl_ota_client_t *client = malloc(sizeof(bbl_ota_client_t));
+    bbl_ota_client_init(client);
+
+    client->tls = esp_tls_conn_new(BBL_STRING_LITERAL_PARAM(OTA_UPDATE_HOST), 443, &cfg);
+    if (client->tls == NULL) {
+        goto exit;
+    }
+
+    size_t buflen = snprintf(client->buf, sizeof(client->buf),
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "User-Agent: 32-bubbles (http://github.com/kolbyjack/32-bubbles/)\r\n"
+        "Connection: Close\r\n"
+        "\r\n"
+        , OTA_UPDATE_PATH
+        , OTA_UPDATE_HOST
+    );
+
+    for (size_t written_bytes = 0; written_bytes < buflen; ) {
+        ssize_t result = esp_tls_conn_write(client->tls, client->buf + written_bytes, buflen - written_bytes);
+        if (result >= 0) {
+            written_bytes += result;
+        } else if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            goto exit;
+        }
+    }
+
+    while (!client->parsing_complete) {
+        ssize_t result = esp_tls_conn_read(client->tls, client->buf + client->buf_used,
+            sizeof(client->buf) - client->buf_used);
+
+        if (result > 0) {
+            http_parser_execute(&client->parser, &client->parser_settings, client->buf + client->buf_used, result);
+            client->buf_used += result;
+        } else if (result < 0 && result != MBEDTLS_ERR_SSL_WANT_WRITE && result != MBEDTLS_ERR_SSL_WANT_READ) {
+            break;
+        }
+    }
+
+    // TODO: Handle redirection
+    if (client->parsing_complete) {
+        bbl_ota_parse_response(client);
+        bbl_ota_check_performed = true;
+    }
+
+exit:
+    esp_tls_conn_delete(client->tls);
+    free(client);
+
+    return bbl_ota_update_available();
+}
+
+bool bbl_ota_update_available()
+{
+    return bbl_ota_firmware_url != NULL && bbl_ota_release_id != 0 && bbl_ota_release_id != bbl_config_get_int(ConfigKeyReleaseID);
+}
+
+bool bbl_ota_download_update()
+{
+    if (!bbl_ota_update_available()) {
+        return false;
+    }
+
+    if (bbl_ota_download_task == 0) {
+        bbl_ota_download_task = xTaskCreate(bbl_ota_download_update_thread, "ota_update", 8192, NULL, 5, NULL);
+    }
+
+    return bbl_ota_download_task != 0;
 }
 
 bool bbl_ota_get_changelog(char *buf, size_t len)
