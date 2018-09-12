@@ -17,6 +17,6 @@
 
 #define BBL_BUILD_DATE __DATE__ " " __TIME__
 
-#define BBL_SOURCE_HASH "4c54610ad2a68d310008fa85ae5ab18225b01d2d"
+#define BBL_SOURCE_HASH "eeee0b5b78bad40e3e3337b487b29d857180a4ac"
 
 #endif

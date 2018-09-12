@@ -32,6 +32,7 @@ static bbl_config_item_t bbl_config_items[] =
     { "version",    StringValue, { .str_val = BBL_VERSION    }, { .str_val = NULL }, true  },
     { "build_date", StringValue, { .str_val = BBL_BUILD_DATE }, { .str_val = NULL }, true  },
     { "boot_count", IntValue,    { .int_val = 0              }, { .int_val = 0    }, false },
+    { "release_id", IntValue,    { .int_val = 0              }, { .int_val = 0    }, false },
 
     { "boot_mode",  IntValue,    { .int_val = 0              }, { .int_val = 0    }, false },
 

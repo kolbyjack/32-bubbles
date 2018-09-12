@@ -12,6 +12,7 @@
 #define BBL_STATIC_ASSERT(exp) _BBL_SASSERT(exp, __LINE__)
 #define BBL_SIZEOF_ARRAY(x) (sizeof(x) / sizeof((x)[0]))
 #define BBL_SIZEOF_FIELD(s, m) (sizeof((((s*)0)->m)))
+#define BBL_STRING_LITERAL_PARAM(x) (x), (sizeof(x) - 1)
 
 #define BBL_DECLARE_RESOURCE(identifier)                            \
     extern uint8_t _bbl_resource_##identifier##_begin[];            \

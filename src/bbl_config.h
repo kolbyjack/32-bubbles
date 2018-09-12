@@ -13,6 +13,7 @@ enum bbl_config_key {
     ConfigKeyVersion,
     ConfigKeyBuildDate,
     ConfigKeyBootCount,
+    ConfigKeyReleaseID,
 
     ConfigKeyBootMode,
 

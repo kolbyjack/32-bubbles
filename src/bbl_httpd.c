@@ -2,6 +2,7 @@
 
 #include "bbl_httpd.h"
 #include "bbl_config.h"
+#include "bbl_ota.h"
 #include "bbl_utils.h"
 #include "bbl_wifi.h"
 #include "bbl_httpd_resources.h"
@@ -12,7 +13,6 @@
 #include <ctype.h>
 #include <string.h>
 
-#define STRING_LITERAL_PARAM(x) (x), (sizeof(x) - 1)
 #define HTTP_BUFSIZ 8192
 
 typedef struct http_client http_client_t;
@@ -285,7 +285,7 @@ static void httpd_read_body(http_client_t *client)
 
 static void httpd_get_index(http_client_t *client)
 {
-    write(client->sock, STRING_LITERAL_PARAM(
+    write(client->sock, BBL_STRING_LITERAL_PARAM(
         "HTTP/1.1 200 OK\r\n"
         "Connection: Close\r\n"
         "Content-Type: text/html\r\n"
@@ -315,7 +315,7 @@ static void httpd_get_config(http_client_t *client)
         bbl_config_get_string(ConfigKeyMQTTUser)
     );
 
-    write(client->sock, STRING_LITERAL_PARAM(
+    write(client->sock, BBL_STRING_LITERAL_PARAM(
         "HTTP/1.1 200 OK\r\n"
         "Connection: Close\r\n"
         "Content-Type: application/json\r\n"
@@ -333,7 +333,7 @@ static void httpd_post_config(http_client_t *client)
         return;
     }
 
-    write(client->sock, STRING_LITERAL_PARAM(
+    write(client->sock, BBL_STRING_LITERAL_PARAM(
         "HTTP/1.1 200 OK\r\n"
         "Connection: Close\r\n"
         "Content-Type: text/html\r\n"
@@ -374,52 +374,9 @@ static void httpd_post_config(http_client_t *client)
     esp_restart();
 }
 
-#if 0
-static void httpd_put_firmware(http_client_t *client)
-{
-    esp_err_t err;
-    esp_ota_handle_t update_handle = NULL;
-    const esp_partition_t *update_partition;
-
-    update_partition = esp_ota_get_next_update_partition(NULL);
-    if (update_partition == NULL) {
-        return;
-    }
-
-    err = esp_ota_begin(update_partition, OTA_SIZE_UNKNOWN, &update_handle);
-    if (err != ESP_OK || update_handle == NULL) {
-        return;
-    }
-
-    if (client->request_body_len > 0) {
-        err = esp_ota_write(update_handle, client->request_body, client->request_body_len);
-    }
-
-    while (err == ESP_OK) {
-        client->buf_used = read(client->sock, client->buf, sizeof(client->buf));
-
-        if (client->buf_used > 0) {
-            err = esp_ota_write(update_handle, client->buf, client->buf_used);
-        } else if (client->buf_used < 0) {
-            err = ESP_ERR_INVALID_RESPONSE;
-        } else {
-            break;
-        }
-    }
-
-    if (esp_ota_end(update_handle) != ESP_OK) {
-        return;
-    }
-
-    if (err == ESP_OK && esp_ota_set_boot_partition(update_partition) == ESP_OK) {
-        esp_restart();
-    }
-}
-#endif
-
 static void httpd_get_favicon(http_client_t *client)
 {
-    write(client->sock, STRING_LITERAL_PARAM(
+    write(client->sock, BBL_STRING_LITERAL_PARAM(
         "HTTP/1.1 200 OK\r\n"
         "Connection: Close\r\n"
         "Content-Type: image/png\r\n"
@@ -429,9 +386,56 @@ static void httpd_get_favicon(http_client_t *client)
     write(client->sock, BBL_RESOURCE(favicon), BBL_SIZEOF_RESOURCE(favicon));
 }
 
+static void httpd_update_check(http_client_t *client)
+{
+    char response[64];
+    size_t response_len;
+
+    bbl_ota_refresh_info();
+
+    response_len = bbl_snprintf(response, sizeof(response),
+        "{\"update_available\": %s}",
+        bbl_ota_update_available() ? "true" : "false"
+    );
+
+    write(client->sock, BBL_STRING_LITERAL_PARAM(
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Close\r\n"
+        "Content-Type: application/json\r\n"
+        "\r\n"
+    ));
+
+    write(client->sock, response, response_len);
+}
+
+static void httpd_download_update(http_client_t *client)
+{
+    char response[64];
+    size_t response_len;
+
+    response_len = bbl_snprintf(response, sizeof(response),
+        "{\"downloading\": %s}",
+        bbl_ota_update_available() ? "true" : "false"
+    );
+
+    write(client->sock, BBL_STRING_LITERAL_PARAM(
+        "HTTP/1.1 200 OK\r\n"
+        "Connection: Close\r\n"
+        "Content-Type: application/json\r\n"
+        "\r\n"
+    ));
+
+    write(client->sock, response, response_len);
+
+    // TODO: Only create one task
+    if (bbl_ota_update_available()) {
+        xTaskCreate(bbl_ota_download_update, "update", 8192, NULL, 5, NULL);
+    }
+}
+
 static void httpd_404(http_client_t *client)
 {
-    write(client->sock, STRING_LITERAL_PARAM(
+    write(client->sock, BBL_STRING_LITERAL_PARAM(
         "HTTP/1.1 404 Not Found\r\n"
         "Connection: Close\r\n"
         "Content-Type: text/plain\r\n"
@@ -468,12 +472,12 @@ static void httpd_route_request(http_client_t *client)
         } else {
             httpd_404(client);
         }
-#if 0
-    } else if (httpd_check_url(client, "/firmware") && client->parser.method == HTTP_PUT) {
-        httpd_put_firmware(client);
-#endif
     } else if (httpd_check_url(client, "/favicon.ico") && client->parser.method == HTTP_GET) {
         httpd_get_favicon(client);
+    } else if (httpd_check_url(client, "/updatecheck") && client->parser.method == HTTP_GET) {
+        httpd_update_check(client);
+    } else if (httpd_check_url(client, "/downloadupdate") && client->parser.method == HTTP_GET) {
+        httpd_download_update(client);
     } else {
         httpd_404(client);
     }
@@ -529,5 +533,5 @@ static void httpd_task_thread()
 
 void bbl_httpd_init()
 {
-    xTaskCreate(httpd_task_thread, "httpd", 4096, NULL, 5, NULL);
+    xTaskCreate(httpd_task_thread, "httpd", 8192, NULL, 5, NULL);
 }
