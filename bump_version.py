@@ -4,61 +4,66 @@ import hashlib
 import os
 import sys
 
-DEFINES = ["MAJORVER", "MINORVER", "REVISION", "PATCHLVL"]
-LEVELS = ["major", "minor", "rev", "patch"]
+VERSION_DEFINES = ["MAJORVER", "MINORVER", "REVISION", "PATCHLVL"]
+VERSION_LEVELS  = ["major", "minor", "rev", "patch"]
 
 # TODO: Get from sys.argv
 bump = None
 
-src_hash = hashlib.sha1()
-httpd_res_hash = hashlib.sha1()
+def update_version(file):
+    lines = []
 
-for subdir in ("src", "res"):
-    for root, dirs, files in os.walk(subdir):
+    with open(file, "r") as fp:
+        for line in fp:
+            for i in range(len(VERSION_DEFINES)):
+                prefix = "#define %s" % VERSION_DEFINES[i]
+                if line.startswith(prefix) and bump in VERSION_LEVELS[0:i+1]:
+                    if bump in VERSION_LEVELS[0:i]:
+                        line = "%s 0\n" % prefix
+                    else:
+                        line = "%s %d\n" % (prefix, (int(line[len(prefix):]) + 1))
+                    break
+
+            lines.append(line)
+
+    with open(file, "w") as fp:
+        fp.writelines(lines)
+
+def hash_files(dir, skip=[]):
+    hash = hashlib.sha1()
+
+    for root, dirs, files in os.walk(dir):
         for name in files:
-            if subdir == "src" and name in ["bbl_version.h", "bbl_httpd_resources.h"]:
+            if name in skip:
                 continue
 
             with open(os.path.join(root, name), "rb") as fp:
                 for chunk in iter(lambda: fp.read(32768), b""):
-                    src_hash.update(chunk)
-                    if subdir == "res":
-                        httpd_res_hash.update(chunk)
+                    hash.update(chunk)
 
-new_source_hash = '"%s"' % src_hash.hexdigest()
-new_httpd_resource_hash = '"%s"' % httpd_res_hash.hexdigest()
+    return '"%s"' % hash.hexdigest()
 
-lines = []
-with open("src/bbl_version.h") as fp:
-    for line in fp:
-        for i in range(len(DEFINES)):
-            prefix = "#define %s" % DEFINES[i]
-            if line.startswith(prefix) and bump in LEVELS[0:i+1]:
-                if bump in LEVELS[0:i]:
-                    line = "%s 0\n" % prefix
-                else:
-                    line = "%s %d\n" % (prefix, (int(line[len(prefix):]) + 1))
-                break
-        else:
-            if line.startswith("#define BBL_SOURCE_HASH"):
-                old_source_hash = line[len("#define BBL_SOURCE_HASH"):].strip()
-                line = "#define BBL_SOURCE_HASH %s\n" % new_source_hash
+def update_hash(file, tag, hash):
+    prefix = "#define %s" % tag
+    lines = []
 
-        lines.append(line)
+    with open(file, "r") as fp:
+        for line in fp:
+            if line.startswith(prefix):
+                old_hash = line[len(prefix):].strip()
+                line = "%s %s\n" % (prefix, hash)
 
-if new_source_hash != old_source_hash:
-    with open("src/bbl_version.h", "w") as fp:
-        fp.writelines(lines)
+            lines.append(line)
 
-lines = []
-with open("src/bbl_httpd_resources.h") as fp:
-    for line in fp:
-        if line.startswith("#define BBL_HTTPD_RESOURCES_HASH"):
-            old_httpd_resource_hash = line[len("#define BBL_HTTPD_RESOURCES_HASH"):].strip()
-            line = "#define BBL_HTTPD_RESOURCES_HASH %s\n" % new_httpd_resource_hash
+    if old_hash != hash:
+        with open(file, "w") as fp:
+            fp.writelines(lines)
 
-        lines.append(line)
+if bump is not None:
+    update_version("src/bbl_version.h")
+else:
+    src_hash = hash_files("src", ["bbl_version.h", "bbl_httpd_resources.h"])
+    update_hash("src/bbl_version.h", "BBL_SOURCE_HASH", src_hash)
 
-if new_httpd_resource_hash != old_httpd_resource_hash:
-    with open("src/bbl_httpd_resources.h", "w") as fp:
-        fp.writelines(lines)
+    httpd_res_hash = hash_files("res")
+    update_hash("src/bbl_httpd_resources.h", "BBL_HTTPD_RESOURCES_HASH", httpd_res_hash)
