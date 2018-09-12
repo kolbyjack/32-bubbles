@@ -13,7 +13,9 @@
 #include "bbl_config.h"
 #include "bbl_utils.h"
 
-#define PUBLISH_STATS 1
+#ifndef BBL_PUBLISH_STATS
+    #define BBL_PUBLISH_STATS 0
+#endif
 #define BLE_BEACON_CACHE_SIZE 64
 #define STATS_INTERVAL_SEC 60
 
@@ -36,7 +38,7 @@ static const esp_ble_scan_params_t ble_scan_params = {
     .scan_duplicate         = BLE_SCAN_DUPLICATE_DISABLE
 };
 
-#if PUBLISH_STATS
+#if BBL_PUBLISH_STATS
 uint boot_count;
 uint32_t stats_millis;
 uint adversitements_received;
@@ -241,7 +243,7 @@ static void publish_ble_advertisement(beacon_t *beacon)
     }
 }
 
-#if PUBLISH_STATS
+#if BBL_PUBLISH_STATS
 static void publish_stats()
 {
     char mqtt_buf[640];
@@ -304,7 +306,7 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
             }
             beacon_cache_count = 0;
 
-#if PUBLISH_STATS
+#if BBL_PUBLISH_STATS
             uint32_t now = bbl_millis();
             if (now - stats_millis >= STATS_INTERVAL_SEC * 1000) {
                 publish_stats();
@@ -342,7 +344,7 @@ void bbl_ble_init(void)
         return;
     }
 
-#if PUBLISH_STATS
+#if BBL_PUBLISH_STATS
     boot_count = bbl_config_get_int(ConfigKeyBootCount);
     stats_millis = bbl_millis();
 #endif

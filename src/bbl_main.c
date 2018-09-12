@@ -8,6 +8,7 @@
 #include "bbl_mqtt.h"
 #include "bbl_wifi.h"
 #include "bbl_version.h"
+#include "bbl_log.h"
 
 #define BUTTON_GPIO GPIO_NUM_0
 #define LED_GPIO    GPIO_NUM_2
@@ -100,7 +101,8 @@ void app_main()
     tcpip_adapter_init();
 
     bbl_config_init();
-    printf("Release ID: %u\nSource hash: %s\n", bbl_config_get_int(ConfigKeyReleaseID), BBL_SOURCE_HASH);
+    BBL_LOG("Release ID: %u", bbl_config_get_int(ConfigKeyReleaseID));
+    BBL_LOG("Source hash: %s", BBL_SOURCE_HASH);
 
     boot_mode = bbl_config_get_int(ConfigKeyBootMode);
     if (bbl_config_get_string(ConfigKeyWiFiSSID)[0] == 0) {

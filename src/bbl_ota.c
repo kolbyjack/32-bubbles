@@ -1,6 +1,7 @@
 #include "bbl_ota.h"
 #include "bbl_utils.h"
 #include "bbl_config.h"
+#include "bbl_log.h"
 
 #include <jsmn.h>
 #include <http_parser.h>
@@ -108,11 +109,11 @@ static jsmntok_t *bbl_ota_next_token(bbl_ota_client_t *ctx)
 #if 0
         jsmntok_t *t = &ctx->tokens[ctx->cur_token];
         switch (t->type) {
-        case JSMN_UNDEFINED: printf("JSMN_UNDEFINED\n"); break;
-        case JSMN_OBJECT: printf("JSMN_OBJECT (%d keys)\n", t->size); break;
-        case JSMN_ARRAY: printf("JSMN_ARRAY (%d entries)\n", t->size); break;
-        case JSMN_STRING: printf("JSMN_STRING (%.*s)\n", jsmn_len(t), &ctx->body[t->start]); break;
-        case JSMN_PRIMITIVE: printf("JSMN_PRMITIVE\n"); break;
+        case JSMN_UNDEFINED: BBL_LOG("JSMN_UNDEFINED"); break;
+        case JSMN_OBJECT: BBL_LOG("JSMN_OBJECT (%d keys)", t->size); break;
+        case JSMN_ARRAY: BBL_LOG("JSMN_ARRAY (%d entries)n", t->size); break;
+        case JSMN_STRING: BBL_LOG("JSMN_STRING (%.*s)", jsmn_len(t), &ctx->body[t->start]); break;
+        case JSMN_PRIMITIVE: BBL_LOG("JSMN_PRMITIVE"); break;
         }
 #endif
         return &ctx->tokens[ctx->cur_token++];
@@ -337,6 +338,7 @@ static int bbl_ota_write_firmware(http_parser *parser, const char *at, size_t le
     }
 
     if (esp_ota_write(client->update_handle, at, length) == ESP_OK) {
+        BBL_LOG("Wrote %d/%d firmware bytes\n", length, client->parser.content_length + length);
         return 0;
     } else {
         return 1;
