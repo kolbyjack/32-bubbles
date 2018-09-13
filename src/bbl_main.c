@@ -101,8 +101,9 @@ void app_main()
     tcpip_adapter_init();
 
     bbl_config_init();
-    BBL_LOG("Release ID: %u", bbl_config_get_int(ConfigKeyReleaseID));
+    BBL_LOG("32-bubbles v%s starting up", BBL_VERSION);
     BBL_LOG("Source hash: %s", BBL_SOURCE_HASH);
+    BBL_LOG("OTA release ID: %u", bbl_config_get_int(ConfigKeyReleaseID));
 
     boot_mode = bbl_config_get_int(ConfigKeyBootMode);
     if (bbl_config_get_string(ConfigKeyWiFiSSID)[0] == 0) {
