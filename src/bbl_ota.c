@@ -24,7 +24,8 @@ typedef struct http_parser_url http_parser_url_t;
 static bool bbl_ota_check_performed = false;
 static const char *bbl_ota_firmware_url = NULL;
 static const char *bbl_ota_changelog_url = NULL;
-static uint32_t bbl_ota_release_id = 0;
+static uint32_t bbl_ota_firmware_id = 0;
+static uint32_t bbl_ota_firmware_size = 0;
 static BaseType_t bbl_ota_download_task = 0;
 
 struct bbl_ota_header
@@ -64,7 +65,8 @@ struct bbl_ota_client
 
     jsmntok_t *firmware_url;
     jsmntok_t *changelog_url;
-    jsmntok_t *release_id;
+    jsmntok_t *firmware_id;
+    jsmntok_t *firmware_size;
 
     // For writing update
     esp_ota_handle_t update_handle;
@@ -72,7 +74,7 @@ struct bbl_ota_client
 };
 
 static const char OTA_UPDATE_HOST[] = "api.github.com";
-static const char OTA_UPDATE_PATH[] = "/repos/kolbyjack/32-bubbles/releases/latest";
+static const char OTA_UPDATE_PATH[] = "/repos/kolbyjack/firmware-test/releases/latest";
 static const char FIRMWARE_ASSET_NAME[] = "firmware.bin";
 static const char CHANGELOG_ASSET_NAME[] = "CHANGELOG.txt";
 
@@ -92,6 +94,11 @@ static char *jsmn_strdup(const bbl_ota_client_t *ctx, const jsmntok_t *t)
     result[tlen] = 0;
 
     return result;
+}
+
+static bool jsmn_isnum(const bbl_ota_client_t *ctx, const jsmntok_t *t)
+{
+    return t->type == JSMN_PRIMITIVE && isdigit(ctx->body[t->start]);
 }
 
 static uint32_t jsmn_touint(const bbl_ota_client_t *ctx, const jsmntok_t *t)
@@ -162,7 +169,9 @@ static bool bbl_ota_parse_asset(bbl_ota_client_t *ctx, jsmntok_t *o)
         return false;
     }
 
+    jsmntok_t *asset_id = NULL;
     jsmntok_t *asset_name = NULL;
+    jsmntok_t *asset_size = NULL;
     jsmntok_t *asset_url = NULL;
 
     for (size_t i = 0; i < o->size && !ctx->error; ++i) {
@@ -171,13 +180,21 @@ static bool bbl_ota_parse_asset(bbl_ota_client_t *ctx, jsmntok_t *o)
 
         if (k == NULL || k->type != JSMN_STRING || v == NULL) {
             ctx->error = true;
+        } else if (bbl_ota_jsmntok_streq(ctx->body, k, "browser_download_url")) {
+            if (v->type == JSMN_STRING) {
+                asset_url = v;
+            }
+        } else if (bbl_ota_jsmntok_streq(ctx->body, k, "id")) {
+            if (jsmn_isnum(ctx, v)) {
+                asset_id = v;
+            }
         } else if (bbl_ota_jsmntok_streq(ctx->body, k, "name")) {
             if (v->type == JSMN_STRING) {
                 asset_name = v;
             }
-        } else if (bbl_ota_jsmntok_streq(ctx->body, k, "browser_download_url")) {
-            if (v->type == JSMN_STRING) {
-                asset_url = v;
+        } else if (bbl_ota_jsmntok_streq(ctx->body, k, "size")) {
+            if (jsmn_isnum(ctx, v)) {
+                asset_size = v;
             }
         } else if (v->type == JSMN_OBJECT) {
             bbl_ota_skip_object(ctx, v);
@@ -188,6 +205,8 @@ static bool bbl_ota_parse_asset(bbl_ota_client_t *ctx, jsmntok_t *o)
 
     if (asset_name != NULL && asset_url != NULL) {
         if (bbl_ota_jsmntok_streq(ctx->body, asset_name, FIRMWARE_ASSET_NAME)) {
+            ctx->firmware_id = asset_id;
+            ctx->firmware_size = asset_size;
             ctx->firmware_url = asset_url;
         } else if (bbl_ota_jsmntok_streq(ctx->body, asset_name, CHANGELOG_ASSET_NAME)) {
             ctx->changelog_url = asset_url;
@@ -232,10 +251,6 @@ static bool bbl_ota_parse_release(bbl_ota_client_t *ctx, jsmntok_t *o)
             ctx->error = true;
         } else if (bbl_ota_jsmntok_streq(ctx->body, k, "assets")) {
             bbl_ota_parse_assets(ctx, v);
-        } else if (bbl_ota_jsmntok_streq(ctx->body, k, "id")) {
-            if (v != NULL && v->type == JSMN_PRIMITIVE && isdigit(ctx->body[v->start])) {
-                ctx->release_id = v;
-            }
         } else if (v->type == JSMN_OBJECT) {
             bbl_ota_skip_object(ctx, v);
         } else if (v->type == JSMN_ARRAY) {
@@ -254,16 +269,19 @@ static bool bbl_ota_parse_response(bbl_ota_client_t *ctx)
     ctx->token_count = jsmn_parse(&parser, ctx->body, ctx->body_len, ctx->tokens, BBL_SIZEOF_ARRAY(ctx->tokens));
 
     if (bbl_ota_parse_release(ctx, bbl_ota_next_token(ctx))) {
-        if (ctx->firmware_url != NULL && ctx->release_id != NULL) {
+        if (ctx->firmware_url != NULL && ctx->firmware_id != NULL && ctx->firmware_size != NULL) {
             free(bbl_ota_firmware_url);
             bbl_ota_firmware_url = jsmn_strdup(ctx, ctx->firmware_url);
-
-            bbl_ota_release_id = jsmn_touint(ctx, ctx->release_id);
+            bbl_ota_firmware_id = jsmn_touint(ctx, ctx->firmware_id);
+            bbl_ota_firmware_size = jsmn_touint(ctx, ctx->firmware_size);
+            BBL_LOG("Found firmware id %u (%u bytes) at %s", bbl_ota_firmware_id, bbl_ota_firmware_size, bbl_ota_firmware_url);
+            // TODO: Make sure firmware will fit on ota partition
         }
 
         if (ctx->changelog_url != NULL) {
             free(bbl_ota_changelog_url);
             bbl_ota_changelog_url = jsmn_strdup(ctx, ctx->firmware_url);
+            BBL_LOG("Found changelog at %s", bbl_ota_changelog_url);
         }
     }
 }
@@ -340,7 +358,7 @@ static int bbl_ota_write_firmware(http_parser *parser, const char *at, size_t le
     }
 
     if (esp_ota_write(client->update_handle, at, length) == ESP_OK) {
-        BBL_LOG("Wrote %d/%d firmware bytes\n", length, client->parser.content_length + length);
+        BBL_LOG("Wrote %d/%d firmware bytes", length, client->parser.content_length + length);
         return 0;
     } else {
         return 1;
@@ -360,7 +378,7 @@ static int bbl_ota_firmware_complete(http_parser *parser)
     }
 
     if (esp_ota_set_boot_partition(client->update_partition) == ESP_OK) {
-        bbl_config_set_int(ConfigKeyReleaseID, bbl_ota_release_id);
+        bbl_config_set_int(ConfigKeyReleaseID, bbl_ota_firmware_id);
         bbl_config_save();
         esp_restart();
     }
@@ -417,6 +435,19 @@ static void bbl_ota_client_init(bbl_ota_client_t *client)
     client->parser_settings.on_message_complete = bbl_ota_on_message_complete;
 }
 
+static size_t bbl_ota_build_request(char *buf, size_t buflen, const char *host, size_t hostlen, const char *path)
+{
+    return snprintf(buf, buflen,
+        "GET %s HTTP/1.1\r\n"
+        "Host: %.*s\r\n"
+        "User-Agent: 32-bubbles (http://github.com/kolbyjack/32-bubbles/)\r\n"
+        "Connection: Close\r\n"
+        "\r\n",
+        path,
+        hostlen, host
+    );
+}
+
 static void bbl_ota_download_update_thread(void *ctx)
 {
     esp_tls_cfg_t cfg = {
@@ -429,12 +460,12 @@ static void bbl_ota_download_update_thread(void *ctx)
 
     const char *next_url = strdup(bbl_ota_firmware_url);
     while (next_url != NULL) {
+        const char *this_url = next_url;
+        next_url = NULL;
+
         bbl_ota_client_init(client);
         client->parser_settings.on_body = bbl_ota_write_firmware;
         client->parser_settings.on_message_complete = bbl_ota_firmware_complete;
-
-        const char *this_url = next_url;
-        next_url = NULL;
 
         http_parser_url_t url;
         http_parser_url_init(&url);
@@ -451,14 +482,9 @@ static void bbl_ota_download_update_thread(void *ctx)
             goto done;
         }
 
-        size_t buflen = snprintf(client->buf, sizeof(client->buf),
-            "GET %s HTTP/1.1\r\n"
-            "Host: %.*s\r\n"
-            "User-Agent: 32-bubbles (http://github.com/kolbyjack/32-bubbles)\r\n"
-            "Connection: Close\r\n"
-            "\r\n"
-            , &this_url[url.field_data[UF_PATH].off]
-            , url.field_data[UF_HOST].len, &this_url[url.field_data[UF_HOST].off]
+        size_t buflen = bbl_ota_build_request(client->buf, sizeof(client->buf),
+            &this_url[url.field_data[UF_HOST].off], url.field_data[UF_HOST].len,
+            &this_url[url.field_data[UF_PATH].off]
         );
 
         for (size_t written_bytes = 0; written_bytes < buflen; ) {
@@ -497,6 +523,7 @@ static void bbl_ota_download_update_thread(void *ctx)
         }
 
 done:
+        BBL_LOGIF(next_url == NULL, "Failed to download %s", this_url);
         esp_tls_conn_delete(client->tls);
         free(this_url);
     }
@@ -527,16 +554,8 @@ bool bbl_ota_refresh_info()
         goto exit;
     }
 
-    size_t buflen = snprintf(client->buf, sizeof(client->buf),
-        "GET %s HTTP/1.1\r\n"
-        "Host: %s\r\n"
-        "User-Agent: 32-bubbles (http://github.com/kolbyjack/32-bubbles/)\r\n"
-        "Connection: Close\r\n"
-        "\r\n"
-        , OTA_UPDATE_PATH
-        , OTA_UPDATE_HOST
-    );
-
+    size_t buflen = bbl_ota_build_request(client->buf, sizeof(client->buf),
+        BBL_STRING_LITERAL_PARAM(OTA_UPDATE_HOST), OTA_UPDATE_PATH);
     for (size_t written_bytes = 0; written_bytes < buflen; ) {
         ssize_t result = esp_tls_conn_write(client->tls, client->buf + written_bytes, buflen - written_bytes);
         if (result >= 0) {
@@ -573,7 +592,9 @@ exit:
 
 bool bbl_ota_update_available()
 {
-    return bbl_ota_firmware_url != NULL && bbl_ota_release_id != 0 && bbl_ota_release_id != bbl_config_get_int(ConfigKeyReleaseID);
+    return bbl_ota_firmware_url != NULL &&
+        bbl_ota_firmware_id != 0 &&
+        bbl_ota_firmware_id != bbl_config_get_int(ConfigKeyReleaseID);
 }
 
 bool bbl_ota_download_update()
