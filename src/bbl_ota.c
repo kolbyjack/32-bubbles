@@ -42,9 +42,9 @@ struct bbl_ota_client
     bool headers_complete;
     bool parsing_complete;
 
-    bbl_ota_header_t headers_in[32];
-    int headers_in_count;
-    char *headers_in_end;
+    bbl_ota_header_t headers[32];
+    int headers_count;
+    char *headers_end;
 
     char *body;
     size_t body_len;
@@ -272,14 +272,14 @@ static int bbl_ota_on_header_field(http_parser *parser, const char *at, size_t l
 {
     bbl_ota_client_t *client = parser->data;
 
-    if (client->headers_in_count & 1) {
-        if (client->headers_in_end != NULL) {
-            *client->headers_in_end = 0;
+    if (client->headers_count & 1) {
+        if (client->headers_end != NULL) {
+            *client->headers_end = 0;
         }
-        client->headers_in[++client->headers_in_count / 2].key = at;
-        client->headers_in_end = (char *)at;
+        client->headers[++client->headers_count / 2].key = at;
+        client->headers_end = (char *)at;
     }
-    client->headers_in_end += length;
+    client->headers_end += length;
 
     return 0;
 }
@@ -288,12 +288,12 @@ static int bbl_ota_on_header_value(http_parser *parser, const char *at, size_t l
 {
     bbl_ota_client_t *client = parser->data;
 
-    if (!(client->headers_in_count & 1)) {
-        *client->headers_in_end = 0;
-        client->headers_in[++client->headers_in_count / 2].value = at;
-        client->headers_in_end = (char *)at;
+    if (!(client->headers_count & 1)) {
+        *client->headers_end = 0;
+        client->headers[++client->headers_count / 2].value = at;
+        client->headers_end = (char *)at;
     }
-    client->headers_in_end += length;
+    client->headers_end += length;
 
     return 0;
 }
@@ -370,9 +370,9 @@ static int bbl_ota_on_headers_complete(http_parser *parser)
 {
     bbl_ota_client_t *client = parser->data;
 
-    client->headers_in_count = (client->headers_in_count + 1) / 2;
-    if (client->headers_in_end != NULL) {
-        *client->headers_in_end = 0;
+    client->headers_count = (client->headers_count + 1) / 2;
+    if (client->headers_end != NULL) {
+        *client->headers_end = 0;
     }
 
     client->headers_complete = true;
@@ -403,9 +403,8 @@ static void bbl_ota_client_init(bbl_ota_client_t *client)
     //client->tls = NULL;
     //client->headers_complete = false;
     //client->parsing_complete = false;
-    //client->buf_used = 0;
-    client->headers_in_count = -1;
-    //client->headers_in_end = NULL;
+    client->headers_count = -1;
+    //client->headers_end = NULL;
     //client->body = NULL;
     //client->body_len = 0;
     //client->argc = 0;
@@ -481,9 +480,9 @@ static void bbl_ota_download_update_thread(void *ctx)
 
                 if (client->headers_complete) {
                     if (client->parser.status_code / 100 == 3) {
-                        for (int i = 0; i < client->headers_in_count; ++i) {
-                            if (strcasecmp(client->headers_in[i].key, "Location") == 0) {
-                                next_url = strdup(client->headers_in[i].value);
+                        for (int i = 0; i < client->headers_count; ++i) {
+                            if (strcasecmp(client->headers[i].key, "Location") == 0) {
+                                next_url = strdup(client->headers[i].value);
                                 break;
                             }
                         }

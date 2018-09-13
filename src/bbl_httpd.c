@@ -35,15 +35,15 @@ struct http_client
     bool headers_complete;
     bool parsing_complete;
 
-    http_keyvalue_t headers_in[32];
-    int headers_in_count;
-    char *headers_in_end;
+    http_keyvalue_t headers[32];
+    int headers_count;
+    char *headers_end;
 
-    char *request_uri;
-    size_t request_uri_len;
+    char *uri;
+    size_t uri_len;
 
-    char *request_body;
-    size_t request_body_len;
+    char *body;
+    size_t body_len;
 
     int argc;
     http_keyvalue_t argv[32];
@@ -129,9 +129,9 @@ static int httpd_on_url(http_parser* parser, const char *at, size_t length)
 {
     http_client_t *client = parser->data;
 
-    if (!client->request_uri)
-        client->request_uri = (char *)at;
-    client->request_uri_len += length;
+    if (!client->uri)
+        client->uri = (char *)at;
+    client->uri_len += length;
 
     return 0;
 }
@@ -140,14 +140,14 @@ static int httpd_on_header_field(http_parser *parser, const char *at, size_t len
 {
     http_client_t *client = parser->data;
 
-    if (client->headers_in_count & 1) {
-        if (client->headers_in_end != NULL) {
-            *client->headers_in_end = 0;
+    if (client->headers_count & 1) {
+        if (client->headers_end != NULL) {
+            *client->headers_end = 0;
         }
-        client->headers_in[++client->headers_in_count / 2].key = at;
-        client->headers_in_end = (char *)at;
+        client->headers[++client->headers_count / 2].key = at;
+        client->headers_end = (char *)at;
     }
-    client->headers_in_end += length;
+    client->headers_end += length;
 
     return 0;
 }
@@ -156,12 +156,12 @@ static int httpd_on_header_value(http_parser* parser, const char *at, size_t len
 {
     http_client_t *client = parser->data;
 
-    if (!(client->headers_in_count & 1)) {
-        *client->headers_in_end = 0;
-        client->headers_in[++client->headers_in_count / 2].value = at;
-        client->headers_in_end = (char *)at;
+    if (!(client->headers_count & 1)) {
+        *client->headers_end = 0;
+        client->headers[++client->headers_count / 2].value = at;
+        client->headers_end = (char *)at;
     }
-    client->headers_in_end += length;
+    client->headers_end += length;
 
     return 0;
 }
@@ -170,10 +170,10 @@ static int httpd_on_body(http_parser* parser, const char *at, size_t length)
 {
     http_client_t *client = parser->data;
 
-    if (!client->request_body) {
-        client->request_body = (char *)at;
+    if (!client->body) {
+        client->body = (char *)at;
     }
-    client->request_body_len += length;
+    client->body_len += length;
 
     return 0;
 }
@@ -182,22 +182,22 @@ static int httpd_on_headers_complete(http_parser* parser)
 {
     http_client_t *client = parser->data;
 
-    client->headers_in_count = (client->headers_in_count + 1) / 2;
-    if (client->headers_in_end != NULL) {
-        *client->headers_in_end = 0;
+    client->headers_count = (client->headers_count + 1) / 2;
+    if (client->headers_end != NULL) {
+        *client->headers_end = 0;
     }
 
-    if (client->request_uri != NULL) {
-        http_parser_parse_url(client->request_uri, client->request_uri_len,
+    if (client->uri != NULL) {
+        http_parser_parse_url(client->uri, client->uri_len,
             client->parser.method == HTTP_CONNECT, &client->url);
 
         if ((client->url.field_set & (1 << UF_PATH)) != 0) {
-            char *path = &client->request_uri[client->url.field_data[UF_PATH].off];
+            char *path = &client->uri[client->url.field_data[UF_PATH].off];
             urldecode(path, "?");
         }
 
         if (parser->method == HTTP_GET && (client->url.field_set & (1 << UF_QUERY)) != 0) {
-            const char *query_string = client->request_uri + client->url.field_data[UF_QUERY].off;
+            const char *query_string = client->uri + client->url.field_data[UF_QUERY].off;
             decode_args(client, query_string);
         }
     }
@@ -211,11 +211,11 @@ static int httpd_on_message_complete(http_parser *parser)
 {
     http_client_t *client = parser->data;
 
-    if (client->request_body) {
-        client->request_body[client->request_body_len] = 0;
+    if (client->body) {
+        client->body[client->body_len] = 0;
 
         if (parser->method == HTTP_POST) {
-            decode_args(client, client->request_body);
+            decode_args(client, client->body);
         }
     }
 
@@ -237,12 +237,12 @@ static void httpd_client_init(http_client_t *client, int sock)
     //client->headers_complete = false;
     //client->parsing_complete = false;
     //client->buf_used = 0;
-    client->headers_in_count = -1;
-    //client->headers_in_end = NULL;
-    //client->request_uri = NULL;
-    //client->request_uri_len = 0;
-    //client->request_body = NULL;
-    //client->request_body_len = 0;
+    client->headers_count = -1;
+    //client->headers_end = NULL;
+    //client->uri = NULL;
+    //client->uri_len = 0;
+    //client->body = NULL;
+    //client->body_len = 0;
     //client->argc = 0;
 
     client->parser_settings.on_url = httpd_on_url;
@@ -461,7 +461,7 @@ static bool httpd_check_url(http_client_t *client, const char *url)
         return false;
     }
 
-    const char *path = &client->request_uri[client->url.field_data[UF_PATH].off];
+    const char *path = &client->uri[client->url.field_data[UF_PATH].off];
     return (strncmp(path, url, url_len) == 0);
 }
 
