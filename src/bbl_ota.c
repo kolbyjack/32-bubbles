@@ -379,6 +379,7 @@ static int bbl_ota_firmware_complete(http_parser *parser)
 
     if (esp_ota_set_boot_partition(client->update_partition) == ESP_OK) {
         bbl_config_set_int(ConfigKeyReleaseID, bbl_ota_firmware_id);
+        bbl_config_set_int(ConfigKeyBootMode, BootModeNormal);
         bbl_config_save();
         esp_restart();
     }

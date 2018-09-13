@@ -101,14 +101,15 @@ void app_main()
     tcpip_adapter_init();
 
     bbl_config_init();
-    BBL_LOG("32-bubbles v%s starting up", BBL_VERSION);
-    BBL_LOG("Source hash: %s", BBL_SOURCE_HASH);
-    BBL_LOG("OTA release ID: %u", bbl_config_get_int(ConfigKeyReleaseID));
-
     boot_mode = bbl_config_get_int(ConfigKeyBootMode);
     if (bbl_config_get_string(ConfigKeyWiFiSSID)[0] == 0) {
         boot_mode = BootModeConfig;
     }
+
+    BBL_LOG("32-bubbles v%s starting up", BBL_VERSION);
+    BBL_LOG("Source hash: %s", BBL_SOURCE_HASH);
+    BBL_LOG("OTA release ID: %u", bbl_config_get_int(ConfigKeyReleaseID));
+    BBL_LOG("Starting in %s mode", bbl_config_boot_mode_string(boot_mode));
 
     io_init();
     bbl_wifi_init();

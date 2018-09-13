@@ -48,4 +48,6 @@ int bbl_config_get_int(bbl_config_key_t key);
 void bbl_config_set_string(bbl_config_key_t key, const char *value);
 void bbl_config_set_int(bbl_config_key_t key, int value);
 
+const char *bbl_config_boot_mode_string(bbl_boot_mode_t boot_mode);
+
 #endif

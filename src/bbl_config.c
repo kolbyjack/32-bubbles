@@ -248,3 +248,11 @@ void bbl_config_set_int(bbl_config_key_t key, int value)
         }
     }
 }
+
+const char *bbl_config_boot_mode_string(bbl_boot_mode_t boot_mode)
+{
+    switch (boot_mode) {
+    case BootModeNormal: return "normal";
+    case BootModeConfig: return "config";
+    }
+}
