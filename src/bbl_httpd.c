@@ -166,18 +166,6 @@ static int httpd_on_header_value(http_parser* parser, const char *at, size_t len
     return 0;
 }
 
-static int httpd_on_body(http_parser* parser, const char *at, size_t length)
-{
-    http_client_t *client = parser->data;
-
-    if (!client->body) {
-        client->body = (char *)at;
-    }
-    client->body_len += length;
-
-    return 0;
-}
-
 static int httpd_on_headers_complete(http_parser* parser)
 {
     http_client_t *client = parser->data;
@@ -203,6 +191,18 @@ static int httpd_on_headers_complete(http_parser* parser)
     }
 
     client->headers_complete = true;
+
+    return 0;
+}
+
+static int httpd_on_body(http_parser* parser, const char *at, size_t length)
+{
+    http_client_t *client = parser->data;
+
+    if (!client->body) {
+        client->body = (char *)at;
+    }
+    client->body_len += length;
 
     return 0;
 }
