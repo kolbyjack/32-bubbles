@@ -7,6 +7,7 @@
 #include <http_parser.h>
 #include <esp_tls.h>
 #include <esp_ota_ops.h>
+#include <rom/miniz.h>
 
 #include <stdbool.h>
 #include <stdio.h>
@@ -55,6 +56,11 @@ struct bbl_ota_client
 
     char buf[OTA_BUFSIZ];
     size_t buf_used;
+
+    // For decompressing deflated bodies
+    tinfl_decompressor inflator;
+    uint8_t *inflate_buf;
+    size_t skip_body_bytes;
 
     // For json parsing
     jsmntok_t tokens[512];
@@ -316,14 +322,79 @@ static int bbl_ota_on_header_value(http_parser *parser, const char *at, size_t l
     return 0;
 }
 
+static int bbl_ota_on_headers_complete(http_parser *parser)
+{
+    bbl_ota_client_t *client = parser->data;
+
+    client->headers_count = (client->headers_count + 1) / 2;
+    if (client->headers_end != NULL) {
+        *client->headers_end = 0;
+    }
+
+    for (int i = 0; i < client->headers_count; ++i) {
+        bbl_ota_header_t *header = &client->headers[i];
+
+        if (strcasecmp(header->key, "Content-Encoding") == 0) {
+            if (strcasecmp(header->value, "gzip") == 0 ||
+                strcasecmp(header->value, "deflate") == 0)
+            {
+                tinfl_init(&client->inflator);
+                client->inflate_buf = malloc(OTA_BUFSIZ);
+                client->skip_body_bytes = (tolower(header->value[0]) == 'g') ? 10 : 0;
+            }
+            break;
+        }
+    }
+
+    client->headers_complete = true;
+
+    return (client->parser.status_code / 100 == 3);
+}
+
+static void bbl_ota_inflate_body(bbl_ota_client_t *client, const char *at, size_t length)
+{
+    if (client->skip_body_bytes >= length) {
+        client->skip_body_bytes -= length;
+        return;
+    }
+
+    if (client->skip_body_bytes > 0) {
+        length -= client->skip_body_bytes;
+        at += client->skip_body_bytes;
+        client->skip_body_bytes = 0;
+    }
+
+    if (client->body == NULL) {
+        client->body = client->inflate_buf;
+    }
+
+    tinfl_status status = TINFL_STATUS_HAS_MORE_OUTPUT;
+    while (length > 0 && client->body_len < OTA_BUFSIZ && status > 0) {
+        size_t in_bytes = length;
+        size_t out_bytes = OTA_BUFSIZ;
+
+        status = tinfl_decompress(&client->inflator, (const mz_uint8 *)at, &in_bytes,
+            client->body, (mz_uint8 *)client->body + client->body_len, &out_bytes,
+            TINFL_FLAG_HAS_MORE_INPUT | TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+
+        client->body_len += out_bytes;
+        length -= in_bytes;
+        at += in_bytes;
+    }
+}
+
 static int bbl_ota_on_body(http_parser *parser, const char *at, size_t length)
 {
     bbl_ota_client_t *client = parser->data;
 
-    if (!client->body) {
-        client->body = (char *)at;
+    if (client->inflate_buf != NULL) {
+        bbl_ota_inflate_body(client, at, length);
+    } else {
+        if (client->body == NULL) {
+            client->body = (char *)at;
+        }
+        client->body_len += length;
     }
-    client->body_len += length;
 
     return 0;
 }
@@ -332,8 +403,12 @@ static int bbl_ota_copy_body(http_parser *parser, const char *at, size_t length)
 {
     bbl_ota_client_t *client = parser->data;
 
-    if (client->body) {
-        memcpy(client->body + client->body_len, at, length);
+    if (client->inflate_buf != NULL) {
+        bbl_ota_inflate_body(client, at, length);
+    } else {
+        if (client->body != NULL) {
+            memcpy(client->body + client->body_len, at, length);
+        }
         client->body_len += length;
     }
 
@@ -355,6 +430,13 @@ static int bbl_ota_write_firmware(http_parser *parser, const char *at, size_t le
         if (err != ESP_OK || client->update_handle == NULL) {
             return 1;
         }
+    }
+
+    if (client->inflate_buf != NULL) {
+        bbl_ota_inflate_body(client, at, length);
+        at = client->body;
+        length = client->body_len;
+        client->body_len = 0;
     }
 
     if (esp_ota_write(client->update_handle, at, length) == ESP_OK) {
@@ -383,20 +465,6 @@ static int bbl_ota_firmware_complete(http_parser *parser)
         bbl_config_save();
         esp_restart();
     }
-}
-
-static int bbl_ota_on_headers_complete(http_parser *parser)
-{
-    bbl_ota_client_t *client = parser->data;
-
-    client->headers_count = (client->headers_count + 1) / 2;
-    if (client->headers_end != NULL) {
-        *client->headers_end = 0;
-    }
-
-    client->headers_complete = true;
-
-    return (client->parser.status_code / 100 == 3);
 }
 
 static int bbl_ota_on_message_complete(http_parser *parser)
@@ -436,6 +504,15 @@ static void bbl_ota_client_init(bbl_ota_client_t *client)
     client->parser_settings.on_message_complete = bbl_ota_on_message_complete;
 }
 
+static void bbl_ota_client_deinit(bbl_ota_client_t *client)
+{
+    free(client->inflate_buf);
+    client->inflate_buf = NULL;
+
+    esp_tls_conn_delete(client->tls);
+    client->tls = NULL;
+}
+
 static size_t bbl_ota_build_request(char *buf, size_t buflen, const char *host, size_t hostlen, const char *path)
 {
     return snprintf(buf, buflen,
@@ -443,6 +520,7 @@ static size_t bbl_ota_build_request(char *buf, size_t buflen, const char *host, 
         "Host: %.*s\r\n"
         "User-Agent: 32-bubbles (http://github.com/kolbyjack/32-bubbles/)\r\n"
         "Connection: Close\r\n"
+        "Accept-Encoding: gzip, deflate\r\n"
         "\r\n",
         path,
         hostlen, host
@@ -525,7 +603,7 @@ static void bbl_ota_download_update_thread(void *ctx)
 
 done:
         BBL_LOGIF(next_url == NULL, "Failed to download %s", this_url);
-        esp_tls_conn_delete(client->tls);
+        bbl_ota_client_deinit(client);
         free(this_url);
     }
 
