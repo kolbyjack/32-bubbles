@@ -4,6 +4,8 @@
 #include <esp_bt.h>
 #include <esp_gap_ble_api.h>
 #include <esp_task_wdt.h>
+#include <stdint.h>
+#include <stdatomic.h>
 
 #include "esp_ibeacon_api.h"
 #include "esp_eddystone_api.h"
@@ -52,7 +54,28 @@ uint publishing_errors;
 #endif
 
 static beacon_t beacon_cache[BLE_BEACON_CACHE_SIZE];
-int beacon_cache_count = 0;
+static int beacon_cache_count = 0;
+static atomic_uint_fast32_t watchdog_tick_count;
+
+static void bbl_ble_watchdog_thread()
+{
+    static const uint32_t WATCHDOG_TICK_MS = 10;
+    static const uint32_t WATCHDOG_TIMEOUT_SEC = 30;
+    static const uint32_t WATCHDOG_TIMEOUT_TICKS = WATCHDOG_TIMEOUT_SEC * 1000 / WATCHDOG_TICK_MS;
+
+    atomic_store(&watchdog_tick_count, 0);
+    while (atomic_fetch_add(&watchdog_tick_count, 1) < WATCHDOG_TIMEOUT_TICKS) {
+        bbl_sleep(WATCHDOG_TICK_MS);
+    }
+
+    esp_restart();
+    vTaskDelete(NULL);
+}
+
+static void bbl_ble_watchdog_reset()
+{
+    atomic_store(&watchdog_tick_count, 0);
+}
 
 static beacon_t *find_beacon(ble_scan_result_evt_param_t *d)
 {
@@ -282,7 +305,7 @@ static void publish_stats()
 
 static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
 {
-    esp_task_wdt_feed();
+    bbl_ble_watchdog_reset();
 
     switch (event) {
     case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
@@ -302,7 +325,7 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
         if (r->search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) {
             for (int i = 0; i < beacon_cache_count; ++i) {
                 publish_ble_advertisement(&beacon_cache[i]);
-                esp_task_wdt_feed();
+                bbl_ble_watchdog_reset();
             }
             beacon_cache_count = 0;
 
@@ -311,7 +334,7 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
             if (now - stats_millis >= STATS_INTERVAL_SEC * 1000) {
                 publish_stats();
                 stats_millis = now;
-                esp_task_wdt_feed();
+                bbl_ble_watchdog_reset();
             }
 #endif
 
@@ -350,4 +373,6 @@ void bbl_ble_init(void)
 #endif
 
     esp_ble_gap_set_scan_params(&ble_scan_params);
+
+    xTaskCreate(bbl_ble_watchdog_thread, "ble_watchdog", 2048, NULL, 5, NULL);
 }
