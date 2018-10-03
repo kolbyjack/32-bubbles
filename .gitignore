@@ -2,7 +2,6 @@
 .piolibdeps/
 .vscode/
 .travis.yml
-src/sdkconfig.h
 .pioenvs
 .piolibdeps
 .vscode/.browse.c_cpp.db*
