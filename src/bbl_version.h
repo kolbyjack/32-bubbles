@@ -5,9 +5,9 @@
 #define _S(x) _S2(x)
 
 #define MAJORVER 0
-#define MINORVER 0
+#define MINORVER 1
 #define REVISION 0
-#define PATCHLVL 1
+#define PATCHLVL 0
 
 #if PATCHLVL > 0
 # define BBL_VERSION _S(MAJORVER) "." _S(MINORVER) "." _S(REVISION) "." _S(PATCHLVL)
