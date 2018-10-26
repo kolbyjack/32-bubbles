@@ -110,11 +110,7 @@ bool bbl_mqtt_connect()
 
     xEventGroupWaitBits(bbl_wifi_event_group, BBL_WIFI_CONNECTED_BIT, false, true, portMAX_DELAY);
 
-    esp_tls_cfg_t cfg = {
-        //.cacert_pem_buf = server_root_cert_pem_start,
-        //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
-        .timeout_ms = -1,
-    };
+    esp_tls_cfg_t cfg = {0};
 
     mqtt_conn = esp_tls_conn_new(host, strlen(host), port, tls ? &cfg : NULL);
     if (mqtt_conn == NULL) {
@@ -221,7 +217,7 @@ bool bbl_mqtt_publish(const char *topic, const void *payload, size_t payload_len
 
 void bbl_mqtt_read(bool block)
 {
-    while (block || esp_tls_get_bytes_avail(mqtt_conn) > 0) {
+    while (block || mbedtls_ssl_get_bytes_avail(&mqtt_conn->ssl) > 0) {
         void *read_ptr = mqtt_buf + mqtt_buf_used;
         int to_read = sizeof(mqtt_buf) - mqtt_buf_used;
         ssize_t received = esp_tls_conn_read(mqtt_conn, read_ptr, to_read);

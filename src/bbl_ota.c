@@ -529,13 +529,8 @@ static size_t bbl_ota_build_request(char *buf, size_t buflen, const char *host, 
 
 static void bbl_ota_download_update_thread(void *ctx)
 {
-    esp_tls_cfg_t cfg = {
-        //.cacert_pem_buf = server_root_cert_pem_start,
-        //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
-        .timeout_ms = -1,
-    };
-
     bbl_ota_client_t *client = malloc(sizeof(bbl_ota_client_t));
+    esp_tls_cfg_t cfg = {0};
 
     const char *next_url = strdup(bbl_ota_firmware_url);
     while (next_url != NULL) {
@@ -619,15 +614,10 @@ bool bbl_ota_refresh_info()
         return bbl_ota_update_available();
     }
 
-    esp_tls_cfg_t cfg = {
-        //.cacert_pem_buf = server_root_cert_pem_start,
-        //.cacert_pem_bytes = server_root_cert_pem_end - server_root_cert_pem_start,
-        .timeout_ms = -1,
-    };
-
     bbl_ota_client_t *client = malloc(sizeof(bbl_ota_client_t));
     bbl_ota_client_init(client);
 
+    esp_tls_cfg_t cfg = {0};
     client->tls = esp_tls_conn_new(BBL_STRING_LITERAL_PARAM(OTA_UPDATE_HOST), 443, &cfg);
     if (client->tls == NULL) {
         goto exit;
