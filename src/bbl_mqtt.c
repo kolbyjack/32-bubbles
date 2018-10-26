@@ -191,7 +191,7 @@ bool bbl_mqtt_connect()
 
     // TODO: Last will, QoS, Keepalive
 
-    header[0] = 0x10;
+    header[0] = MQTT_CONNECT;
     header_len = 1 + mqtt_encode_len(&header[1], body_len);
     fill_iovec(&iov[0], header, header_len);
 
@@ -244,7 +244,7 @@ bool bbl_mqtt_publish(const char *topic, const void *payload, size_t payload_len
     uint16_t topic_len = strlen(topic);
     uint16_t topic_len_be = htons(topic_len);
 
-    header[0] = 0x30;
+    header[0] = MQTT_PUBLISH;
     header_len = 1 + mqtt_encode_len(&header[1], 2 + topic_len + payload_len);
 
     struct iovec iov[] = {
