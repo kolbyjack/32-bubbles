@@ -6,6 +6,27 @@
 
 #include <esp_tls.h>
 
+typedef enum mqtt_packetid mqtt_packetid_t;
+
+enum mqtt_packetid {
+    MQTT_FORBIDDEN   = 0x00,
+    MQTT_CONNECT     = 0x10,
+    MQTT_CONNACK     = 0x20,
+    MQTT_PUBLISH     = 0x30,
+    MQTT_PUBACK      = 0x40,
+    MQTT_PUBREC      = 0x50,
+    MQTT_PUBREL      = 0x60,
+    MQTT_PUBCOMP     = 0x70,
+    MQTT_SUBSCRIBE   = 0x80,
+    MQTT_SUBACK      = 0x90,
+    MQTT_UNSUBSCRIBE = 0xa0,
+    MQTT_UNSUBACK    = 0xb0,
+    MQTT_PINGREQ     = 0xc0,
+    MQTT_PINGRESP    = 0xd0,
+    MQTT_DISCONNECT  = 0xe0,
+    MQTT_RESERVED    = 0xf0,
+};
+
 static esp_tls_t *mqtt_conn = NULL;
 static bool mqtt_connack_received = false;
 static uint8_t mqtt_buf[512];
