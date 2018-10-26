@@ -65,22 +65,25 @@ static bool mqtt_writev(const struct iovec *iov, int iovcnt)
 static int mqtt_parse(const uint8_t *buf, size_t len)
 {
     size_t pktlen = 0;
+    bool length_parsed = false;
 
     size_t idx = 1;
-    while (idx < len && idx < 5) {
+    for (; idx < len && !length_parsed; ++idx) {
         pktlen += (buf[idx] & 0x7f) << (7 * (idx - 1));
-        if ((buf[idx++] & 0x80) == 0) {
-            break;
-        }
+        length_parsed = ((buf[idx] & 0x80) == 0 || idx == 4);
     }
 
-    if (idx + pktlen > len) {
+    if (!length_parsed) {
         return 0;
     }
 
     if (pktlen > sizeof(mqtt_buf)) {
         mqtt_skip = idx + pktlen - len;
         return len;
+    }
+
+    if (idx + pktlen > len) {
+        return 0;
     }
 
     // TODO: Actually parse packets
