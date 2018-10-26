@@ -107,8 +107,15 @@ static int mqtt_parse(const uint8_t *buf, size_t len)
         return 0;
     }
 
-    // TODO: Actually parse packets
-    mqtt_connack_received = true;
+    switch (buf[0] & 0xf0) {
+    case MQTT_CONNACK:
+        if (!mqtt_connack_received && pktlen == 2 && buf[idx + 1] == 0) {
+            mqtt_connack_received = true;
+        } else {
+            bbl_mqtt_disconnect();
+        }
+        break;
+    }
 
     return idx + pktlen;
 }
