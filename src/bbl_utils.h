@@ -15,7 +15,7 @@
 #define BBL_STRING_LITERAL_PARAM(x) (x), (sizeof(x) - 1)
 
 #define BBL_DECLARE_RESOURCE(identifier)                            \
-    extern uint8_t _bbl_resource_##identifier##_begin[];            \
+    extern const uint8_t _bbl_resource_##identifier##_begin[];      \
     extern const uint8_t _bbl_resource_##identifier##_end[]
 
 #define BBL_INCLUDE_RESOURCE(identifier, filename)                  \
