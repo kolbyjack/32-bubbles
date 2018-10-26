@@ -215,6 +215,19 @@ err:
 
 bool bbl_mqtt_disconnect()
 {
+    if (mqtt_conn != NULL) {
+        uint8_t header[2];
+
+        header[0] = MQTT_DISCONNECT;
+        header[1] = 0;
+
+        struct iovec iov[] = {
+            { header, sizeof(header) },
+        };
+
+        mqtt_writev(iov, LWIP_ARRAYSIZE(iov));
+    }
+
     esp_tls_conn_delete(mqtt_conn);
     mqtt_conn = NULL;
     mqtt_connack_received = false;
