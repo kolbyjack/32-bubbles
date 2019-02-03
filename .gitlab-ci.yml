@@ -1,0 +1,15 @@
+---
+stages:
+  - build
+
+build:
+  stage: build
+  image: python:3
+  before_script:
+    - pip install -U platformio
+  script:
+    - platormio ci
+  artifacts:
+    paths: [lib]
+
+# vim: set ai et sw=2 ts=2:
