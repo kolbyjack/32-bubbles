@@ -40,6 +40,7 @@ static const esp_ble_scan_params_t ble_scan_params = {
 
 #if BBL_PUBLISH_STATS
 uint boot_count;
+uint32_t boot_millis;
 uint32_t stats_millis;
 uint adversitements_received;
 uint raw_published;
@@ -258,6 +259,7 @@ static void publish_stats()
     size_t payload_length = bbl_snprintf(payload, sizeof(mqtt_buf) - (payload - mqtt_buf),
         "{"
             "\"boot_count\":%u,"
+            "\"uptime\":%u,"
             "\"seen\":%u,"
             "\"pub_raw\":%u,"
             "\"pub_ibeacon\":%u,"
@@ -267,6 +269,7 @@ static void publish_stats()
             "\"total_free\":%u"
         "}",
         boot_count,
+        bbl_millis() - boot_millis,
         adversitements_received,
         raw_published,
         ibeacon_published,
@@ -347,6 +350,7 @@ void bbl_ble_init(void)
 #if BBL_PUBLISH_STATS
     boot_count = bbl_config_get_int(ConfigKeyBootCount);
     stats_millis = bbl_millis();
+    boot_millis = stats_millis;
 #endif
 
     esp_ble_gap_set_scan_params(&ble_scan_params);
