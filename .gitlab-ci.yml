@@ -8,7 +8,7 @@ build:
   before_script:
     - pip install -U platformio
   script:
-    - platormio ci
+    - platformio ci
   artifacts:
     paths: [lib]
 
