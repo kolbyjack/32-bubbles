@@ -8,7 +8,7 @@ build:
   before_script:
     - pip install -U platformio
   script:
-    - platformio ci --project-conf platformio.ini src lib
+    - platformio run
   artifacts:
     paths: [lib]
 
