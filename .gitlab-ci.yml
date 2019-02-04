@@ -10,6 +10,7 @@ build:
   script:
     - platformio run
   artifacts:
-    paths: [lib]
+    name: 32-bubbles-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
+    paths: [firmware.bin]
 
 # vim: set ai et sw=2 ts=2:
