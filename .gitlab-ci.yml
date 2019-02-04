@@ -9,6 +9,7 @@ build:
     - pip install -U platformio
   script:
     - platformio run
+    - cp .pioenvs/esp32dev/firmware.bin .
   artifacts:
     name: 32-bubbles-$CI_COMMIT_REF_SLUG-$CI_COMMIT_SHORT_SHA
     paths: [firmware.bin]
