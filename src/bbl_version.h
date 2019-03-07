@@ -6,7 +6,7 @@
 
 #define MAJORVER 0
 #define MINORVER 1
-#define REVISION 0
+#define REVISION 1
 #define PATCHLVL 0
 
 #if PATCHLVL > 0
@@ -17,6 +17,6 @@
 
 #define BBL_BUILD_DATE __DATE__ " " __TIME__
 
-#define BBL_SOURCE_HASH "29bb3c30325dd91cf02caa594c397f9c045280c7"
+#define BBL_SOURCE_HASH "eabf20ff08b409463cc1aff47349c741e94a1a50"
 
 #endif

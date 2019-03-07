@@ -42,6 +42,7 @@ static const esp_ble_scan_params_t ble_scan_params = {
 uint boot_count;
 uint32_t boot_millis;
 uint32_t stats_millis;
+uint64_t uptime_millis;
 uint adversitements_received;
 uint raw_published;
 uint ibeacon_published;
@@ -245,12 +246,19 @@ static void publish_ble_advertisement(beacon_t *beacon)
 }
 
 #if BBL_PUBLISH_STATS
-static void publish_stats()
+static void publish_stats(uint32_t elapsed)
 {
     char mqtt_buf[640];
     multi_heap_info_t hi;
 
     heap_caps_get_info(&hi, MALLOC_CAP_DEFAULT);
+
+    uptime_millis += elapsed;
+    unsigned int uptime_days    = (unsigned int)(uptime_millis / 86400000);
+    unsigned int uptime_hours   = (unsigned int)(uptime_millis / 3600000 % 24);
+    unsigned int uptime_minutes = (unsigned int)(uptime_millis / 60000 % 60);
+    unsigned int uptime_seconds = (unsigned int)(uptime_millis / 1000 % 60);
+    unsigned int uptime_ms      = (unsigned int)(uptime_millis % 1000);
 
     size_t topic_length = bbl_snprintf(mqtt_buf, sizeof(mqtt_buf), "happy-bubbles/stats/%s",
         bbl_config_get_string(ConfigKeyHostname));
@@ -259,7 +267,7 @@ static void publish_stats()
     size_t payload_length = bbl_snprintf(payload, sizeof(mqtt_buf) - (payload - mqtt_buf),
         "{"
             "\"boot_count\":%u,"
-            "\"uptime\":%u,"
+            "\"uptime\":\"%ud,%02u:%02u:%02u.%03u\","
             "\"seen\":%u,"
             "\"pub_raw\":%u,"
             "\"pub_ibeacon\":%u,"
@@ -269,7 +277,7 @@ static void publish_stats()
             "\"total_free\":%u"
         "}",
         boot_count,
-        bbl_millis() - boot_millis,
+        uptime_days, uptime_hours, uptime_minutes, uptime_seconds, uptime_ms,
         adversitements_received,
         raw_published,
         ibeacon_published,
@@ -312,7 +320,7 @@ static void ble_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *par
 #if BBL_PUBLISH_STATS
             uint32_t now = bbl_millis();
             if (now - stats_millis >= STATS_INTERVAL_SEC * 1000) {
-                publish_stats();
+                publish_stats(now - stats_millis);
                 stats_millis = now;
                 esp_task_wdt_feed();
             }
