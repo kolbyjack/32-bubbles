@@ -273,8 +273,9 @@ static void publish_stats(uint32_t elapsed)
             "\"pub_ibeacon\":%u,"
             "\"pub_eddystone\":%u,"
             "\"pub_err\":%u,"
-            "\"total_alloc\":%u,"
-            "\"total_free\":%u"
+            "\"heap_alloc\":%u,"
+            "\"heap_free\":%u,"
+            "\"stack_hwm\":%u"
         "}",
         boot_count,
         uptime_days, uptime_hours, uptime_minutes, uptime_seconds, uptime_ms,
@@ -284,7 +285,8 @@ static void publish_stats(uint32_t elapsed)
         eddystone_published,
         publishing_errors,
         hi.total_allocated_bytes,
-        hi.total_free_bytes
+        hi.total_free_bytes,
+        uxTaskGetStackHighWaterMark(NULL)
     );
 
     ble_publish(mqtt_buf, payload, payload_length);
