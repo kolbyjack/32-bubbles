@@ -18,7 +18,7 @@ void bbl_sleep(uint32_t ms)
 
 size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
 {
-    static const size_t UNSET_PRECISION = (size_t)-1;
+    static const size_t UNSET_PRECISION = SIZE_MAX;
     static const char *hex = "0123456789abcdef";
     typedef enum printf_length printf_length_t;
     enum printf_length {
@@ -36,13 +36,13 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
     va_list args;
     size_t bufidx = 0;
 
-    if (bufsiz == 0) {
+    if (bufsiz-- == 0) {
         return 0;
     }
 
     va_start(args, fmt);
 
-    while (bufidx + 1 < bufsiz && *fmt) {
+    while (bufidx < bufsiz && *fmt) {
         char c = *fmt++;
 
         if (c != '%') {
@@ -130,13 +130,13 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
                     }
                 }
 
-                for (; bufidx + 1 < bufsiz && precision * 2 < width; --width) {
+                for (; bufidx < bufsiz && precision * 2 < width; --width) {
                     buf[bufidx++] = fill;
                 }
 
-                for (size_t i = 0; bufidx + 1 < bufsiz && i < precision; ++i) {
+                for (size_t i = 0; bufidx < bufsiz && i < precision; ++i) {
                     buf[bufidx++] = hex[blob[i] >> 4];
-                    if (bufidx + 1 < bufsiz) {
+                    if (bufidx < bufsiz) {
                         buf[bufidx++] = hex[blob[i] & 0x0f];
                     }
                 }
@@ -144,20 +144,20 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
                 const char *str = va_arg(args, const char *);
                 size_t slen = strlen(str);
 
-                if (precision != UNSET_PRECISION && precision < slen) {
-                    slen = precision;
+                if (slen < precision) {
+                    precision = slen;
                 }
 
-                for (; bufidx + 1 < bufsiz && slen < width; --width) {
+                for (; bufidx < bufsiz && precision < width; --width) {
                     buf[bufidx++] = fill;
                 }
 
-                for (size_t i = 0; bufidx + 1 < bufsiz && i < slen; ++i) {
+                for (size_t i = 0; bufidx < bufsiz && i < precision; ++i) {
                     if (length == PrintfLengthIntmaxT && (str[i] == '\\' || str[i] == '"')) {
-                        if (bufidx + 2 >= bufsiz) {
-                            goto done;
-                        }
                         buf[bufidx++] = '\\';
+                        if (bufidx == bufsiz) {
+                            break;
+                        }
                     }
                     buf[bufidx++] = str[i];
                 }
@@ -192,12 +192,12 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
                 *p++ = prefix;
             }
 
-            while (bufidx + 1 < bufsiz && width > p - tbuf) {
+            while (bufidx < bufsiz && width > p - tbuf) {
                 buf[bufidx++] = fill;
                 --width;
             }
 
-            while (bufidx + 1 < bufsiz && p > tbuf) {
+            while (bufidx < bufsiz && p > tbuf) {
                 buf[bufidx++] = *--p;
             }
 
@@ -227,12 +227,12 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
                 n /= base;
             } while (n > 0);
 
-            while (bufidx + 1 < bufsiz && width > p - tbuf) {
+            while (bufidx < bufsiz && width > p - tbuf) {
                 buf[bufidx++] = fill;
                 --width;
             }
 
-            while (bufidx + 1 < bufsiz && p > tbuf) {
+            while (bufidx < bufsiz && p > tbuf) {
                 buf[bufidx++] = *--p;
             }
 
@@ -245,7 +245,6 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
         }
     }
 
-done:
     buf[bufidx] = 0;
 
     va_end(args);
