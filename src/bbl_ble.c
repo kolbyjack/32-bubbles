@@ -248,15 +248,13 @@ static void publish_ble_advertisement(beacon_t *beacon)
 #if BBL_PUBLISH_STATS
 static void publish_stats(uint32_t elapsed)
 {
-    char mqtt_buf[640];
-    multi_heap_info_t hi;
 
-    heap_caps_get_info(&hi, MALLOC_CAP_DEFAULT);
+    char mqtt_buf[640];
 
     uptime_millis += elapsed;
-    unsigned int uptime_days    = (unsigned int)(uptime_millis / 86400000);
-    unsigned int uptime_hours   = (unsigned int)(uptime_millis / 3600000 % 24);
-    unsigned int uptime_minutes = (unsigned int)(uptime_millis / 60000 % 60);
+    unsigned int uptime_days    = (unsigned int)(uptime_millis / (24 * 60 * 60 * 1000));
+    unsigned int uptime_hours   = (unsigned int)(uptime_millis / (60 * 60 * 1000) % 24);
+    unsigned int uptime_minutes = (unsigned int)(uptime_millis / (60 * 1000) % 60);
     unsigned int uptime_seconds = (unsigned int)(uptime_millis / 1000 % 60);
     unsigned int uptime_ms      = (unsigned int)(uptime_millis % 1000);
 
@@ -272,10 +270,7 @@ static void publish_stats(uint32_t elapsed)
             "\"pub_raw\":%u,"
             "\"pub_ibeacon\":%u,"
             "\"pub_eddystone\":%u,"
-            "\"pub_err\":%u,"
-            "\"heap_alloc\":%u,"
-            "\"heap_free\":%u,"
-            "\"stack_hwm\":%u"
+            "\"pub_err\":%u"
         "}",
         boot_count,
         uptime_days, uptime_hours, uptime_minutes, uptime_seconds, uptime_ms,
@@ -283,10 +278,7 @@ static void publish_stats(uint32_t elapsed)
         raw_published,
         ibeacon_published,
         eddystone_published,
-        publishing_errors,
-        hi.total_allocated_bytes,
-        hi.total_free_bytes,
-        uxTaskGetStackHighWaterMark(NULL)
+        publishing_errors
     );
 
     ble_publish(mqtt_buf, payload, payload_length);
