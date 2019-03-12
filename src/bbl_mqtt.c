@@ -3,6 +3,7 @@
 #include "bbl_mqtt.h"
 #include "bbl_config.h"
 #include "bbl_wifi.h"
+#include "bbl_utils.h"
 
 #include <esp_tls.h>
 
@@ -28,6 +29,7 @@ enum mqtt_packetid {
 };
 
 static esp_tls_t *mqtt_conn = NULL;
+static bool mqtt_conn_error = false;
 static bool mqtt_connack_received = false;
 static uint8_t mqtt_buf[512];
 static size_t mqtt_buf_used;
@@ -75,6 +77,7 @@ static bool mqtt_writev(const struct iovec *iov, int iovcnt)
                 ++i;
             }
         } else if (result != MBEDTLS_ERR_SSL_WANT_READ && result != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            mqtt_conn_error = true;
             bbl_mqtt_disconnect();
             return false;
         }
@@ -144,6 +147,7 @@ bool bbl_mqtt_connect()
     esp_tls_cfg_t cfg = {0};
 
     mqtt_conn = esp_tls_conn_new(host, strlen(host), port, tls ? &cfg : NULL);
+    mqtt_conn_error = false;
     if (mqtt_conn == NULL) {
         goto err;
     }
@@ -209,13 +213,14 @@ bool bbl_mqtt_connect()
 
 err:
     bbl_sleep(5000);
+    mqtt_conn_error = true;
     bbl_mqtt_disconnect();
     return false;
 }
 
 bool bbl_mqtt_disconnect()
 {
-    if (mqtt_conn != NULL) {
+    if (mqtt_conn != NULL && !mqtt_conn_error) {
         uint8_t header[2];
 
         header[0] = MQTT_DISCONNECT;
@@ -230,6 +235,7 @@ bool bbl_mqtt_disconnect()
 
     esp_tls_conn_delete(mqtt_conn);
     mqtt_conn = NULL;
+    mqtt_conn_error = false;
     mqtt_connack_received = false;
     mqtt_buf_used = 0;
     mqtt_skip = 0;
@@ -289,6 +295,7 @@ void bbl_mqtt_read(bool block)
                 }
             } while (mqtt_buf_used > 0 && parsed > 0);
         } else if (MBEDTLS_ERR_SSL_WANT_READ != received && MBEDTLS_ERR_SSL_WANT_WRITE != received) {
+            mqtt_conn_error = true;
             bbl_mqtt_disconnect();
             break;
         }
