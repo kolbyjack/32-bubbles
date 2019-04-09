@@ -54,11 +54,18 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
         size_t precision = UNSET_PRECISION;
         printf_length_t length = PrintfLengthInt;
         char fill = ' ';
+        char sep = 0;
 
         // Fill char
         c = *fmt++;
         if (c == '0') {
             fill = '0';
+            c = *fmt++;
+        }
+
+        // Separator flag
+        if (c == ',') {
+            sep = ',';
             c = *fmt++;
         }
 
@@ -177,6 +184,7 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
 
             char tbuf[32], *p = tbuf;
             char prefix = 0;
+            int grouplen = 0;
 
             if (n < 0) {
                 prefix = '-';
@@ -184,6 +192,10 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
             }
 
             do {
+                if (sep == ',' && grouplen++ == 3) {
+                    *p++ = ',';
+                    grouplen = 1;
+                }
                 *p++ = hex[n % 10];
                 n /= 10;
             } while (n > 0);
@@ -217,12 +229,17 @@ size_t bbl_snprintf(char *buf, size_t bufsiz, const char *fmt, ...)
 
             char tbuf[32], *p = tbuf;
             int base = 10;
+            int grouplen = 0;
 
             if (c == 'x') {
                 base = 16;
             }
 
             do {
+                if (sep == ',' && grouplen++ == 3) {
+                    *p++ = ',';
+                    grouplen = 1;
+                }
                 *p++ = hex[n % base];
                 n /= base;
             } while (n > 0);
