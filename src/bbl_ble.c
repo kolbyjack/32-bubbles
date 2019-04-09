@@ -248,7 +248,6 @@ static void publish_ble_advertisement(beacon_t *beacon)
 #if BBL_PUBLISH_STATS
 static void publish_stats(uint32_t elapsed)
 {
-
     char mqtt_buf[640];
 
     uptime_millis += elapsed;
@@ -264,13 +263,13 @@ static void publish_stats(uint32_t elapsed)
     char *payload = mqtt_buf + topic_length + 1;
     size_t payload_length = bbl_snprintf(payload, sizeof(mqtt_buf) - (payload - mqtt_buf),
         "{"
-            "\"boot_count\":%u,"
+            "\"boot_count\":%,u,"
             "\"uptime\":\"%ud,%02u:%02u:%02u.%03u\","
-            "\"seen\":%u,"
-            "\"pub_raw\":%u,"
-            "\"pub_ibeacon\":%u,"
-            "\"pub_eddystone\":%u,"
-            "\"pub_err\":%u"
+            "\"seen\":\"%,u\","
+            "\"pub_raw\":\"%,u\","
+            "\"pub_ibeacon\":\"%,u\","
+            "\"pub_eddystone\":\"%,u\","
+            "\"pub_err\":\"%,u\""
         "}",
         boot_count,
         uptime_days, uptime_hours, uptime_minutes, uptime_seconds, uptime_ms,
